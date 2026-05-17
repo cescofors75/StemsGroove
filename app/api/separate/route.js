@@ -222,7 +222,7 @@ export async function POST(request) {
       );
     }
 
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sterms-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stems-"));
     const inputPath = path.join(tempDir, uploaded.name);
     const outputRoot = path.join(tempDir, "out");
 

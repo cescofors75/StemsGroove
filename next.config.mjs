@@ -1,6 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  devIndicators: false,
+  experimental: {
+    devtoolSegmentExplorer: false,
+    browserDebugInfoInTerminal: false,
+  },
   onDemandEntries: {
     // Keep entries alive longer in dev to avoid transient chunk-not-found on Windows.
     maxInactiveAge: 1000 * 60 * 60,

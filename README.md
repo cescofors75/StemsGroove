@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎚️ STERMS — Four-Stem Separator
+# 🎚️ STEMS — Four-Stem Separator
 
 **Split any audio track into Vocals · Drums · Bass · Other**
 *Powered by [Demucs HTDemucs](https://github.com/facebookresearch/demucs) · Built with Next.js 15 · GPU-accelerated (CUDA)*
@@ -64,7 +64,7 @@ Open [http://localhost:3000](http://localhost:3000) 🎉
 
 ## 📡 REST API
 
-Sterms exposes two API routes you can call from **any other project** (CORS enabled).
+Stems exposes two API routes you can call from **any other project** (CORS enabled).
 
 ### `POST /api/separate`
 
@@ -125,7 +125,7 @@ Without this variable all origins (`*`) are allowed.
 ## 🗂️ Project Structure
 
 ```
-sterms/
+stems/
 ├── app/
 │   ├── page.jsx                       # Main UI — upload, playback, sequencer
 │   ├── layout.jsx
