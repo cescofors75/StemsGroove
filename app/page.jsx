@@ -1499,6 +1499,354 @@ function GrooveExtractor({ stemUrl, stemLabel = "STEM" }) {
   );
 }
 
+function drawGrooveComparison(onsetSeries, canvas, activeStemId) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, canvas.offsetWidth || 720);
+  const height = 180;
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const activeSeries = (onsetSeries || []).filter((item) => item?.selected);
+  const maxDuration = Math.max(...activeSeries.map((item) => item.duration || 0), 1);
+  const rowHeight = Math.max(28, (height - 24) / Math.max(activeSeries.length, 1));
+
+  activeSeries.forEach((series, index) => {
+    const isActive = series.id === activeStemId;
+    const y = 16 + index * rowHeight;
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.fillRect(0, y - 10, width, 1);
+    ctx.fillStyle = isActive ? series.color : "rgba(255,255,255,0.45)";
+    ctx.font = isActive ? "700 10px monospace" : "10px monospace";
+    ctx.fillText(series.label, 8, y - 2);
+    for (const onset of series.onsets || []) {
+      const x = 72 + (onset / maxDuration) * Math.max(1, width - 88);
+      ctx.strokeStyle = isActive ? series.color : `${series.color}55`;
+      ctx.lineWidth = isActive ? 3.2 : 1.5;
+      ctx.globalAlpha = isActive ? 1 : 0.35;
+      ctx.beginPath();
+      ctx.moveTo(x, y + 2);
+      ctx.lineTo(x, y + rowHeight - 10);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  });
+}
+
+function drawGrooveDeviationComparison(seriesList, canvas, activeStemId) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, canvas.offsetWidth || 720);
+  const height = 220;
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const activeSeries = (seriesList || []).filter((item) => item?.selected && item?.map?.length);
+  const allValues = activeSeries.flatMap((item) => (item.map || []).filter((value) => value !== null).map(Math.abs));
+  const maxAbs = Math.max(...allValues, 10);
+  const padX = 44;
+  const padY = 18;
+  const midY = height / 2;
+  const stepCount = Math.max(...activeSeries.map((item) => item.map?.length || 0), 16);
+  const cellW = (width - padX * 2) / stepCount;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  ctx.beginPath();
+  ctx.moveTo(padX, midY);
+  ctx.lineTo(width - padX, midY);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.38)";
+  ctx.font = "10px monospace";
+  ctx.fillText("early", 6, 20);
+  ctx.fillText("late", 10, height - 12);
+
+  for (let i = 0; i < stepCount; i += 4) {
+    const x = padX + i * cellW;
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.beginPath();
+    ctx.moveTo(x, padY);
+    ctx.lineTo(x, height - padY);
+    ctx.stroke();
+  }
+
+  activeSeries.forEach((series, index) => {
+    const isActive = series.id === activeStemId;
+    const legendX = padX + index * 118;
+    if (legendX > width - 110) {
+      return;
+    }
+    ctx.globalAlpha = isActive ? 1 : 0.45;
+    ctx.fillStyle = series.color;
+    ctx.fillRect(legendX, 6, 14, isActive ? 4 : 3);
+    ctx.font = isActive ? "700 10px monospace" : "10px monospace";
+    ctx.fillText(series.label, legendX + 20, 10);
+    ctx.globalAlpha = 1;
+  });
+
+  activeSeries.forEach((series) => {
+    const isActive = series.id === activeStemId;
+    ctx.strokeStyle = isActive ? series.color : `${series.color}66`;
+    ctx.lineWidth = isActive ? 2.8 : 1.2;
+    ctx.globalAlpha = isActive ? 1 : 0.32;
+    ctx.beginPath();
+    let started = false;
+    (series.map || []).forEach((value, index) => {
+      if (value === null) {
+        started = false;
+        return;
+      }
+      const x = padX + index * cellW + cellW / 2;
+      const y = midY - (value / maxAbs) * (midY - padY - 8);
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+}
+
+function GrooveComparison({ stemUrls }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [bpm, setBpm] = useState(120);
+  const [subdivision, setSubdivision] = useState(16);
+  const [threshold, setThreshold] = useState(0.15);
+  const [grooveData, setGrooveData] = useState({});
+  const [selectedStems, setSelectedStems] = useState({ drums: true, bass: true, vocals: true, other: true });
+  const [activeStemId, setActiveStemId] = useState("drums");
+  const comparisonCanvasRef = useRef(null);
+  const deviationCanvasRef = useRef(null);
+
+  const availableStems = useMemo(() => STEMS.filter((stem) => stemUrls?.[stem.id]), [stemUrls]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const nextData = {};
+      for (const stem of availableStems) {
+        try {
+          const res = await fetch(stemUrls[stem.id]);
+          if (!res.ok) {
+            continue;
+          }
+          const arrayBuffer = await res.arrayBuffer();
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          const ctx = new AudioCtx();
+          const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+          await ctx.close();
+          const mono = mixToMono(buffer);
+          const detected = Math.round(estimateBpm(mono, buffer.sampleRate));
+          const analysis = grooveBuildMap(buffer, detected, subdivision, threshold);
+          const confidence = !analysis.hasUsefulGroove
+            ? "baja"
+            : analysis.deviationStd >= 8 && analysis.mappedCount >= 8
+              ? "alta"
+              : "media";
+          nextData[stem.id] = {
+            ...stem,
+            duration: buffer.duration,
+            onsets: analysis.onsets,
+            map: analysis.map,
+            stats: analysis,
+            confidence,
+          };
+        } catch {
+          nextData[stem.id] = {
+            ...stem,
+            duration: 0,
+            onsets: [],
+            map: [],
+            stats: { mappedCount: 0, onsets: [], hasUsefulGroove: false, detectedBpm: null, activeBpm: null, minDev: 0, maxDev: 0, avgDev: 0, deviationStd: 0 },
+            confidence: "baja",
+          };
+        }
+      }
+      if (!cancelled) {
+        setGrooveData(nextData);
+        const useful = Object.fromEntries(availableStems.map((stem) => [stem.id, nextData[stem.id]?.stats?.hasUsefulGroove ?? false]));
+        setSelectedStems((prev) => ({ ...prev, ...useful }));
+        const firstUseful = availableStems.find((stem) => useful[stem.id]);
+        if (firstUseful) {
+          setActiveStemId((prev) => (useful[prev] ? prev : firstUseful.id));
+        }
+        if (Object.values(useful).some(Boolean)) {
+          setCollapsed(false);
+        }
+      }
+    };
+
+    if (availableStems.length) {
+      load();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [availableStems, stemUrls, subdivision, threshold]);
+
+  const selectedSeries = useMemo(
+    () =>
+      availableStems.map((stem) => ({
+        ...(grooveData[stem.id] || {}),
+        id: stem.id,
+        label: grooveData[stem.id]?.label || stem.label,
+        color: grooveData[stem.id]?.color || stem.color,
+        onsets: grooveData[stem.id]?.onsets || [],
+        map: grooveData[stem.id]?.map || [],
+        stats:
+          grooveData[stem.id]?.stats ||
+          {
+            mappedCount: 0,
+            onsets: [],
+            hasUsefulGroove: false,
+            detectedBpm: null,
+            activeBpm: null,
+            minDev: 0,
+            maxDev: 0,
+            avgDev: 0,
+            deviationStd: 0,
+          },
+        confidence: grooveData[stem.id]?.confidence || "baja",
+        duration: grooveData[stem.id]?.duration || 0,
+        selected: !!selectedStems[stem.id],
+      })),
+    [availableStems, grooveData, selectedStems],
+  );
+
+  useEffect(() => {
+    drawGrooveComparison(selectedSeries, comparisonCanvasRef.current, activeStemId);
+    drawGrooveDeviationComparison(selectedSeries, deviationCanvasRef.current, activeStemId);
+  }, [activeStemId, selectedSeries]);
+
+  const selectedUseful = selectedSeries.filter((item) => item?.selected && item?.stats?.hasUsefulGroove);
+  const activeStem = selectedSeries.find((item) => item?.id === activeStemId && item?.selected && item?.stats?.hasUsefulGroove) || selectedUseful[0] || null;
+
+  if (!availableStems.length) {
+    return null;
+  }
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
+      <button
+        type="button"
+        onClick={() => setCollapsed((value) => !value)}
+        style={{ width: "100%", background: "transparent", border: "none", borderBottom: collapsed ? "none" : "1px solid rgba(255,255,255,0.07)", cursor: "pointer", padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", color: "inherit" }}
+      >
+        <span style={{ fontFamily: "'Space Mono', monospace", letterSpacing: 2, fontSize: 10, color: "rgba(255,255,255,0.72)" }}>GROOVE COMPARISON</span>
+        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.4)" }}>{collapsed ? "▼" : "▲"}</span>
+      </button>
+      {!collapsed && (
+        <div style={{ padding: "16px 18px", display: "grid", gap: 14 }}>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.68)", lineHeight: 1.5, background: "rgba(90,163,232,0.07)", border: "1px solid rgba(90,163,232,0.22)", borderRadius: 8, padding: "10px 12px" }}>
+            Vista comparativa unica: selecciona uno o varios stems para superponer eventos de groove y sus desviaciones. Las etiquetas de confianza evitan vender ruido como analisis real.
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            {[
+              { label: "BPM", value: bpm, min: 60, max: 200, step: 1, set: setBpm, fmt: (value) => value },
+              { label: "Subdivision", value: subdivision, min: 8, max: 32, step: 8, set: setSubdivision, fmt: (value) => value },
+              { label: "Threshold", value: threshold, min: 0.02, max: 0.5, step: 0.01, set: setThreshold, fmt: (value) => value.toFixed(2) },
+            ].map(({ label, value, min, max, step, set, fmt }) => (
+              <div key={label} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "rgba(255,255,255,0.45)", marginBottom: 8 }}>
+                  <span>{label}</span>
+                  <span style={{ color: "#fff", fontFamily: "'Space Mono', monospace" }}>{fmt(value)}</span>
+                </div>
+                <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => set(label === "Threshold" ? parseFloat(event.target.value) : parseInt(event.target.value, 10))} style={{ width: "100%", accentColor: "#5aa3e8", height: 3, cursor: "pointer" }} />
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {selectedSeries.map((stem) => (
+              <label key={stem.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 999, border: `1px solid ${stem.id === activeStemId ? stem.color : `${stem.color}55`}`, background: stem.id === activeStemId ? `${stem.color}22` : `${stem.color}14`, color: "rgba(255,255,255,0.82)", fontSize: 11 }}>
+                <input type="checkbox" checked={!!selectedStems[stem.id]} onChange={() => setSelectedStems((prev) => ({ ...prev, [stem.id]: !prev[stem.id] }))} />
+                <input type="radio" name="active-groove-stem" checked={stem.id === activeStemId} onChange={() => setActiveStemId(stem.id)} disabled={!stem.selected || !stem.stats?.hasUsefulGroove} />
+                <span style={{ color: stem.color, fontFamily: "'Space Mono', monospace" }}>{stem.label}</span>
+                <span style={{ color: stem.confidence === "alta" ? "#78d870" : stem.confidence === "media" ? "#e8c547" : "rgba(255,255,255,0.45)" }}>
+                  {stem.confidence}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+            {selectedSeries.filter((stem) => stem.selected).map((stem) => (
+              <div key={`stats-${stem.id}`} style={{ background: "rgba(255,255,255,0.03)", border: `0.5px solid ${stem.color}44`, borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: stem.color, marginBottom: 6 }}>{stem.label}</div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.62)" }}>onsets {stem.stats?.onsets?.length ?? 0} · mapped {stem.stats?.mappedCount ?? 0}</div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.62)" }}>bpm {stem.stats?.activeBpm ? Math.round(stem.stats.activeBpm) : "?"} · var {stem.stats?.deviationStd?.toFixed(1) ?? "0.0"} ms</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: 1, marginBottom: 8 }}>ONSETS SUPERPUESTOS</div>
+            <canvas ref={comparisonCanvasRef} style={{ width: "100%", height: 180, display: "block" }} />
+          </div>
+
+          <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: 1, marginBottom: 8 }}>DESVIACIONES DE GROOVE</div>
+            <canvas ref={deviationCanvasRef} style={{ width: "100%", height: 220, display: "block" }} />
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.62)", fontSize: 11 }}>
+              <span style={{ fontFamily: "'Space Mono', monospace" }}>EXPORT STEM</span>
+              <span style={{ color: activeStem?.color || "rgba(255,255,255,0.35)", fontFamily: "'Space Mono', monospace" }}>{activeStem?.label || "NONE"}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => activeStem && grooveExportJSON(activeStem.map, activeStem.stats.activeBpm || bpm, subdivision)}
+              disabled={!activeStem}
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.14)",
+                color: activeStem ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.32)",
+                borderRadius: 8,
+                padding: "7px 14px",
+                fontSize: 12,
+                cursor: activeStem ? "pointer" : "not-allowed",
+                fontFamily: "'Space Mono', monospace",
+                letterSpacing: 0.5,
+              }}
+            >
+              ↓ JSON stem activo
+            </button>
+            <button
+              type="button"
+              onClick={() => activeStem && grooveExportCSV(activeStem.map)}
+              disabled={!activeStem}
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.14)",
+                color: activeStem ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.32)",
+                borderRadius: 8,
+                padding: "7px 14px",
+                fontSize: 12,
+                cursor: activeStem ? "pointer" : "not-allowed",
+                fontFamily: "'Space Mono', monospace",
+                letterSpacing: 0.5,
+              }}
+            >
+              ↓ CSV stem activo
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PatternRow({
   label,
   color,
@@ -3113,10 +3461,7 @@ export default function Page() {
           </div>
         )}
 
-        {ready &&
-          STEMS.filter((stem) => stems[stem.id]).map((stem) => (
-            <GrooveExtractor key={`groove-${stem.id}`} stemUrl={stems[stem.id]} stemLabel={`${stem.label} STEM`} />
-          ))}
+        {ready && <GrooveComparison stemUrls={stems} />}
 
         <div
           style={{
