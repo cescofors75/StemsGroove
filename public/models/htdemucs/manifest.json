@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "name": "htdemucs-browser-core",
+  "format": "onnx-core",
+  "modelUrl": "https://your-cdn.example.com/models/htdemucs.onnx",
+  "metaUrl": "/models/htdemucs/htdemucs.json",
+  "stems": ["vocals", "drums", "bass", "other"],
+  "sampleRate": 44100,
+  "notes": "HTDemucs browser core should be hosted outside git and loaded from a CDN, GitHub Release, Hugging Face or similar static URL."
+}

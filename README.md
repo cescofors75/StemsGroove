@@ -19,6 +19,7 @@
 - 🎹 **Other** — guitars, synths and remaining layers
 - ⚡ **GPU-accelerated** — uses CUDA automatically when a NVIDIA GPU is detected
 - 🎛️ **3 quality modes** — Fast (`mdx_extra`), Balanced & Quality (`htdemucs`)
+- 🧪 **Browser engine** — HTDemucs ONNX runs client-side and is ready for Vercel-friendly hosting
 - 🎵 **Sequencer pattern view** — visual beat grid extracted from each stem, with BPM detection
 - 📡 **REST API with CORS** — integrate from any frontend project
 - 🔊 **Per-stem volume control** — independent sliders per stem
@@ -164,6 +165,20 @@ Browser  ──POST /api/separate──▶  Next.js Route Handler
 
 Browser  ──GET /api/stems/<runId>/vocals──▶  streams audio/mpeg
 ```
+
+### Browser deployment
+
+The separation flow now runs in the browser through [lib/client-demixer.js](lib/client-demixer.js) and reads its runtime configuration from [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json).
+
+Recommended deployment layout:
+
+1. Keep the repository light and do not commit the `.onnx` model file.
+2. Export the model offline with `tools/export_htdemucs_onnx.py`.
+3. Host the generated `.onnx` file on external static storage such as a CDN, GitHub Releases, Hugging Face or similar.
+4. Point `modelUrl` in [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json) to that external URL.
+5. Keep [public/models/htdemucs/htdemucs.json](public/models/htdemucs/htdemucs.json) in the repo as lightweight metadata.
+
+This avoids pushing a 100MB+ model into git while keeping Vercel deployment simple: frontend bundle plus lightweight static metadata.
 
 ---
 

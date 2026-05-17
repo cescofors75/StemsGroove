@@ -6,3 +6,4 @@ out/
 .stems/
 *.log
 .venv/
+public/models/**/*.onnx

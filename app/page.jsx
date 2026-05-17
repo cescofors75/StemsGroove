@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { separateTrackInBrowser } from "../lib/client-demixer.js";
 
 const STEMS = [
   {
@@ -108,7 +109,11 @@ function formatSeconds(seconds) {
   return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
-function drawEditorWaveform(canvas, mono, trimStart, trimEnd, duration) {
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function drawEditorWaveform(canvas, mono, trimStart, trimEnd, duration, previewPosition = null) {
   if (!canvas || !mono?.length || !duration) {
     return;
   }
@@ -145,6 +150,11 @@ function drawEditorWaveform(canvas, mono, trimStart, trimEnd, duration) {
 
   const startX = (trimStart / duration) * width;
   const endX = (trimEnd / duration) * width;
+  const selectionWidth = Math.max(0, endX - startX);
+
+  ctx.fillStyle = "rgba(232,197,71,0.08)";
+  ctx.fillRect(startX, 0, selectionWidth, height);
+
   ctx.fillStyle = "rgba(8,9,11,0.62)";
   ctx.fillRect(0, 0, startX, height);
   ctx.fillRect(endX, 0, Math.max(0, width - endX), height);
@@ -157,6 +167,40 @@ function drawEditorWaveform(canvas, mono, trimStart, trimEnd, duration) {
   ctx.moveTo(endX, 0);
   ctx.lineTo(endX, height);
   ctx.stroke();
+
+  ctx.fillStyle = "rgba(232,197,71,0.96)";
+  ctx.fillRect(startX - 2, 0, 4, height);
+  ctx.fillRect(endX - 2, 0, 4, height);
+
+  ctx.fillStyle = "rgba(8,9,11,0.88)";
+  ctx.fillRect(startX - 7, midY - 18, 10, 36);
+  ctx.fillRect(endX - 3, midY - 18, 10, 36);
+
+  ctx.fillStyle = "rgba(232,197,71,0.98)";
+  ctx.fillRect(startX - 3, midY - 10, 2, 20);
+  ctx.fillRect(startX + 1, midY - 10, 2, 20);
+  ctx.fillRect(endX - 3, midY - 10, 2, 20);
+  ctx.fillRect(endX + 1, midY - 10, 2, 20);
+
+  if (Number.isFinite(previewPosition)) {
+    const clampedPosition = clamp(previewPosition, 0, duration);
+    const playheadX = (clampedPosition / duration) * width;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.92)";
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.moveTo(playheadX + 0.5, 0);
+    ctx.lineTo(playheadX + 0.5, height);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.beginPath();
+    ctx.moveTo(playheadX, 0);
+    ctx.lineTo(playheadX - 4, 7);
+    ctx.lineTo(playheadX + 4, 7);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 function renderEditedBuffer(sourceBuffer, trimStart, trimEnd, fadeInSeconds, fadeOutSeconds) {
@@ -2015,11 +2059,14 @@ export default function Page() {
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorError, setEditorError] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewPosition, setPreviewPosition] = useState(null);
+  const [editorDragMode, setEditorDragMode] = useState(null);
   const [analysisFile, setAnalysisFile] = useState(null);
 
   const audioRef = useRef(null);
   const fileRef = useRef(null);
   const waveformCanvasRef = useRef(null);
+  const editorDragRef = useRef(null);
   const sequencerTimerRef = useRef(null);
   const sequencerAudioCtxRef = useRef(null);
   const sequencerSourcesRef = useRef({});
@@ -2041,6 +2088,8 @@ export default function Page() {
         ? "BALANCED"
         : "QUALITY";
 
+  const engineLabel = "BROWSER";
+
   const baseName = useMemo(() => {
     if (!file) {
       return "track";
@@ -2051,6 +2100,20 @@ export default function Page() {
   const generatedPatterns = useMemo(() => generatePatternSet(patterns, generationSeed), [patterns, generationSeed]);
   const displayedPatterns = patternMode === "generate" ? generatedPatterns : patterns;
   const hasSequencerSolo = useMemo(() => Object.values(sequencerSolo).some(Boolean), [sequencerSolo]);
+  const editedDuration = useMemo(() => Math.max(0, (trimEnd || editorDuration) - trimStart), [editorDuration, trimEnd, trimStart]);
+  const previewOffset = useMemo(() => {
+    if (!Number.isFinite(previewPosition)) {
+      return 0;
+    }
+    return clamp(previewPosition - trimStart, 0, editedDuration || 0);
+  }, [editedDuration, previewPosition, trimStart]);
+  const previewProgress = useMemo(() => {
+    if (!editedDuration) {
+      return 0;
+    }
+    return (previewOffset / editedDuration) * 100;
+  }, [editedDuration, previewOffset]);
+  const isPreviewPlaying = playing === "original-preview";
   const sequencerActiveVoices = useMemo(() => {
     const voices = ["original", "drums", "bass", "vocals", "other"];
     return voices.filter((voiceId) => !sequencerMute[voiceId] && (!hasSequencerSolo || sequencerSolo[voiceId]));
@@ -2214,14 +2277,28 @@ export default function Page() {
     audioRef.current = audio;
 
     const onEnded = () => setPlaying(null);
+    const onPause = () => {
+      if (playing !== "original-preview") {
+        setPreviewPosition(null);
+      }
+    };
+    const onTimeUpdate = () => {
+      if (playing === "original-preview") {
+        setPreviewPosition(audio.currentTime + trimStart);
+      }
+    };
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("timeupdate", onTimeUpdate);
 
     return () => {
       audio.pause();
       audio.src = "";
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("timeupdate", onTimeUpdate);
     };
-  }, []);
+  }, [playing, trimStart]);
 
   useEffect(() => {
     if (!playing || !audioRef.current) {
@@ -2275,8 +2352,109 @@ export default function Page() {
   const waveformMonoRef = useRef(null);
 
   useEffect(() => {
-    drawEditorWaveform(waveformCanvasRef.current, waveformMonoRef.current, trimStart, trimEnd || editorDuration, editorDuration);
-  }, [editorDuration, trimEnd, trimStart]);
+    drawEditorWaveform(
+      waveformCanvasRef.current,
+      waveformMonoRef.current,
+      trimStart,
+      trimEnd || editorDuration,
+      editorDuration,
+      previewPosition,
+    );
+  }, [editorDuration, previewPosition, trimEnd, trimStart]);
+
+  const updateTrimFromPointer = useCallback(
+    (clientX) => {
+      const canvas = waveformCanvasRef.current;
+      const drag = editorDragRef.current;
+      if (!canvas || !drag || !editorDuration) {
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+      const time = ratio * editorDuration;
+      const minGap = 0.05;
+
+      if (drag.mode === "start") {
+        setTrimStart(clamp(time, 0, Math.max(0, trimEnd - minGap)));
+        return;
+      }
+
+      if (drag.mode === "end") {
+        setTrimEnd(clamp(time, Math.min(editorDuration, trimStart + minGap), editorDuration));
+        return;
+      }
+
+      if (drag.mode === "move") {
+        const nextStart = clamp(time - drag.pointerOffset, 0, Math.max(0, editorDuration - drag.selectionLength));
+        const nextEnd = Math.min(editorDuration, nextStart + drag.selectionLength);
+        setTrimStart(nextStart);
+        setTrimEnd(nextEnd);
+      }
+    },
+    [editorDuration, trimEnd, trimStart],
+  );
+
+  useEffect(() => {
+    if (!editorDragMode) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event) => {
+      updateTrimFromPointer(event.clientX);
+    };
+
+    const handlePointerUp = () => {
+      editorDragRef.current = null;
+      setEditorDragMode(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [editorDragMode, updateTrimFromPointer]);
+
+  const beginWaveformDrag = useCallback(
+    (event) => {
+      if (editorLoading || !editorDuration || !waveformCanvasRef.current) {
+        return;
+      }
+
+      const rect = waveformCanvasRef.current.getBoundingClientRect();
+      const pointerX = clamp(event.clientX - rect.left, 0, rect.width);
+      const startX = (trimStart / editorDuration) * rect.width;
+      const endX = ((trimEnd || editorDuration) / editorDuration) * rect.width;
+      const handleZone = 16;
+
+      let mode = null;
+      if (Math.abs(pointerX - startX) <= handleZone) {
+        mode = "start";
+      } else if (Math.abs(pointerX - endX) <= handleZone) {
+        mode = "end";
+      } else if (pointerX > startX && pointerX < endX) {
+        mode = "move";
+      }
+
+      if (!mode) {
+        return;
+      }
+
+      event.preventDefault();
+      const pointerTime = (pointerX / Math.max(1, rect.width)) * editorDuration;
+      editorDragRef.current = {
+        mode,
+        pointerOffset: pointerTime - trimStart,
+        selectionLength: Math.max(0.05, (trimEnd || editorDuration) - trimStart),
+      };
+      setEditorDragMode(mode);
+      updateTrimFromPointer(event.clientX);
+    },
+    [editorDuration, editorLoading, trimEnd, trimStart, updateTrimFromPointer],
+  );
 
   const loadEditorBuffer = useCallback(async (incoming) => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -2441,6 +2619,7 @@ export default function Page() {
     setAnalysisFile(incoming);
     setOriginalUrl(localUrl);
     setEditorLoading(true);
+    setPreviewPosition(null);
     setStatus("idle");
     setProgress(0);
     setCurrentStep("");
@@ -2505,6 +2684,7 @@ export default function Page() {
     setTrimEnd(0);
     setFadeInMs(0);
     setFadeOutMs(0);
+    setPreviewPosition(null);
     sourceBufferRef.current = null;
     waveformMonoRef.current = null;
     setStatus("idle");
@@ -2571,25 +2751,22 @@ export default function Page() {
       const sourceFile = await buildEditedFile();
       setAnalysisFile(sourceFile);
 
-      const formData = new FormData();
-      formData.append("file", sourceFile);
-      formData.append("mode", separateMode);
-
-      const response = await fetch("/api/separate", {
-        method: "POST",
-        body: formData,
+      const nextStems = await separateTrackInBrowser(sourceFile, {
+        onProgress: ({ progress: nextProgress, label }) => {
+          if (Number.isFinite(nextProgress)) {
+            setProgress(Math.max(3, Math.min(96, Math.round(nextProgress))));
+          }
+          if (label) {
+            setCurrentStep(label);
+          }
+        },
       });
 
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload?.error || "No se pudo procesar el archivo.");
-      }
-
-      setStems(payload.stems || {});
+      setStems(nextStems || {});
       setProgress(100);
       setCurrentStep("Stems ready");
       setStatus("done");
-      await createPatterns(sourceFile, payload.stems || {});
+      await createPatterns(sourceFile, nextStems || {});
     } catch (processingError) {
       setStatus("error");
       setPlaying(null);
@@ -2622,6 +2799,7 @@ export default function Page() {
     }
 
     setPreviewBusy(true);
+    setPreviewPosition(trimStart);
     try {
       const previewFile = await buildEditedFile();
       const previewUrl = URL.createObjectURL(previewFile);
@@ -2629,22 +2807,35 @@ export default function Page() {
       const player = audioRef.current;
       if (player) {
         const revoke = () => {
+          setPreviewPosition(null);
           URL.revokeObjectURL(previewUrl);
           player.removeEventListener("ended", revoke);
         };
         player.addEventListener("ended", revoke);
       }
     } catch {
+      setPreviewPosition(null);
       setError("No se pudo generar la preview editada.");
     } finally {
       setPreviewBusy(false);
     }
   }, [buildEditedFile, file]);
 
+  const restartPreview = useCallback(async () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    setPlaying(null);
+    setPreviewPosition(trimStart);
+    await previewEditedMix();
+  }, [previewEditedMix, trimStart]);
+
   const pauseStem = () => {
     if (audioRef.current) {
       audioRef.current.pause();
     }
+    setPreviewPosition(null);
     setPlaying(null);
   };
 
@@ -2986,12 +3177,66 @@ export default function Page() {
               gap: 14,
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.68)" }}>
-                MIX EDITOR
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <div>
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.68)", marginBottom: 6 }}>
+                  MIX EDITOR
+                </div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.42)" }}>
+                  {editorError ? "Editor no disponible para este archivo; el procesado sigue funcionando." : "Trim, fade in/out y preview antes de separar stems."}
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.42)" }}>
-                {editorError ? "Editor no disponible para este archivo; el procesado sigue funcionando." : "Trim, fade in/out y preview antes de separar stems."}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (isPreviewPlaying) {
+                      pauseStem();
+                    } else {
+                      previewEditedMix();
+                    }
+                  }}
+                  disabled={editorLoading || previewBusy}
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 999,
+                    border: `1px solid ${isPreviewPlaying ? accentColor : "rgba(255,255,255,0.14)"}`,
+                    background: isPreviewPlaying ? accentColor : "rgba(255,255,255,0.03)",
+                    color: isPreviewPlaying ? "#050505" : "rgba(255,255,255,0.82)",
+                    cursor: editorLoading || previewBusy ? "wait" : "pointer",
+                    fontFamily: "'Space Mono', monospace",
+                    fontSize: 12,
+                    boxShadow: isPreviewPlaying ? `0 0 18px rgba(232,197,71,0.22)` : "none",
+                  }}
+                  title={isPreviewPlaying ? "Pausar preview" : "Reproducir preview"}
+                >
+                  {isPreviewPlaying ? "II" : "▶"}
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    restartPreview();
+                  }}
+                  disabled={editorLoading || previewBusy || !editedDuration}
+                  style={{
+                    height: 38,
+                    borderRadius: 999,
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    background: "rgba(255,255,255,0.03)",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: editorLoading || previewBusy ? "wait" : "pointer",
+                    fontFamily: "'Space Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: 1.2,
+                    padding: "0 14px",
+                  }}
+                  title="Volver a empezar la preview"
+                >
+                  RESTART
+                </button>
               </div>
             </div>
 
@@ -3003,9 +3248,91 @@ export default function Page() {
                 background: "rgba(255,255,255,0.02)",
                 minHeight: 120,
                 opacity: editorError ? 0.45 : 1,
+                cursor:
+                  editorLoading || editorError
+                    ? "default"
+                    : editorDragMode === "move"
+                      ? "grabbing"
+                      : "ew-resize",
               }}
             >
-              <canvas ref={waveformCanvasRef} style={{ width: "100%", height: 120, display: "block" }} />
+              <canvas
+                ref={waveformCanvasRef}
+                onPointerDown={beginWaveformDrag}
+                style={{ width: "100%", height: 120, display: "block", touchAction: "none" }}
+              />
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.46)" }}>
+              <span style={{ color: accentColor }}>Arrastra el borde izquierdo o derecho sobre la onda para hacer trim.</span>
+              <span>Mueve la zona central para desplazar la selección completa.</span>
+            </div>
+
+            <div
+              style={{
+                borderRadius: 12,
+                border: "1px solid rgba(232,197,71,0.18)",
+                background: "linear-gradient(180deg, rgba(232,197,71,0.08), rgba(232,197,71,0.02))",
+                padding: "12px 14px",
+                display: "grid",
+                gap: 10,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 1.4, color: accentColor }}>
+                  PREVIEW TRANSPORT
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.66)" }}>
+                  <span>IN {formatSeconds(trimStart)}</span>
+                  <span>OUT {formatSeconds(trimEnd || editorDuration)}</span>
+                  <span>LEN {formatSeconds(editedDuration)}</span>
+                </div>
+              </div>
+
+              <div style={{ position: "relative", height: 10, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: "linear-gradient(90deg, rgba(232,197,71,0.18), rgba(232,197,71,0.08))",
+                  }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: `${previewProgress}%`,
+                    minWidth: isPreviewPlaying || previewProgress > 0 ? 6 : 0,
+                    borderRadius: 999,
+                    background: "linear-gradient(90deg, #e8c547 0%, #ffd978 100%)",
+                    boxShadow: "0 0 14px rgba(232,197,71,0.45)",
+                    transition: isPreviewPlaying ? "width 0.08s linear" : "width 0.18s ease",
+                  }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "50%",
+                    left: `calc(${previewProgress}% - 7px)`,
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    border: "2px solid rgba(8,9,11,0.9)",
+                    background: accentColor,
+                    boxShadow: "0 0 0 3px rgba(232,197,71,0.16), 0 0 14px rgba(232,197,71,0.45)",
+                    transform: "translateY(-50%)",
+                    opacity: previewProgress > 0 || isPreviewPlaying ? 1 : 0,
+                    transition: "left 0.08s linear, opacity 0.18s ease",
+                  }}
+                />
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.48)" }}>
+                <span>{previewBusy ? "Renderizando preview editada..." : isPreviewPlaying ? `Reproduciendo ${formatSeconds(previewOffset)} / ${formatSeconds(editedDuration)}` : "Preview lista para revisar el tramo editado."}</span>
+                <span style={{ color: accentColor, fontFamily: "'Space Mono', monospace" }}>{Math.round(previewProgress)}%</span>
+              </div>
             </div>
 
             <div style={{ display: "grid", gap: 12 }}>
@@ -3084,7 +3411,7 @@ export default function Page() {
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.45)" }}>
               <span>Duracion original: {formatSeconds(editorDuration)}</span>
-              <span>Duracion editada: {formatSeconds(Math.max(0, (trimEnd || editorDuration) - trimStart))}</span>
+              <span>Duracion editada: {formatSeconds(editedDuration)}</span>
             </div>
           </div>
         )}
@@ -3092,32 +3419,38 @@ export default function Page() {
         {file && !ready && (
           <div style={{ marginBottom: 24 }}>
             {!processing && (
-              <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                {[
-                  { id: "fast", label: "FAST", hint: "mdx_extra" },
-                  { id: "balanced", label: "BAL", hint: "htdemucs" },
-                  { id: "quality", label: "HQ", hint: "htdemucs 320k" },
-                ].map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => setSeparateMode(mode.id)}
-                    style={{
-                      border: `1px solid ${separateMode === mode.id ? accentColor : "rgba(255,255,255,0.2)"}`,
-                      color: separateMode === mode.id ? accentColor : "rgba(255,255,255,0.7)",
-                      background: "transparent",
-                      borderRadius: 999,
-                      padding: "6px 11px",
-                      fontSize: 10,
-                      cursor: "pointer",
-                      fontFamily: "'Space Mono', monospace",
-                      letterSpacing: 1,
-                    }}
-                    title={mode.hint}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
+              <div style={{ display: "grid", gap: 10, marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {[
+                    { id: "fast", label: "FAST", hint: "mdx_extra" },
+                    { id: "balanced", label: "BAL", hint: "htdemucs" },
+                    { id: "quality", label: "HQ", hint: "htdemucs 320k" },
+                  ].map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => setSeparateMode(mode.id)}
+                      style={{
+                        border: `1px solid ${separateMode === mode.id ? accentColor : "rgba(255,255,255,0.2)"}`,
+                        color: separateMode === mode.id ? accentColor : "rgba(255,255,255,0.7)",
+                        background: "transparent",
+                        borderRadius: 999,
+                        padding: "6px 11px",
+                        fontSize: 10,
+                        cursor: "pointer",
+                        fontFamily: "'Space Mono', monospace",
+                        letterSpacing: 1,
+                      }}
+                      title={mode.hint}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
+                  Browser mode usa HTDemucs ONNX servido desde /models/htdemucs y ejecuta toda la separacion en el navegador. Esta configuracion ya no usa fallback al backend.
+                </div>
               </div>
             )}
 
@@ -3139,7 +3472,7 @@ export default function Page() {
                   cursor: "pointer",
                 }}
               >
-                PROCESS WITH DEMUCS ({modeLabel})
+                PROCESS {engineLabel} ({modeLabel})
               </button>
             ) : (
               <div
@@ -3165,7 +3498,7 @@ export default function Page() {
                       marginBottom: 6,
                     }}
                   >
-                    PROCESSING {modeLabel}
+                    PROCESSING {engineLabel} {modeLabel}
                   </div>
                   <div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>{currentStep}</div>
                   <div
@@ -3477,8 +3810,7 @@ export default function Page() {
           <div style={{ fontFamily: "'Space Mono', monospace", letterSpacing: 2, fontSize: 10, marginBottom: 8 }}>
             ENGINE NOTES
           </div>
-          Demucs runs server-side through <code>/api/separate</code>. Output files are stored temporarily under
-          <code> .stems/</code> and streamed by <code>/api/stems/[runId]/[stem]</code>.
+          Browser mode loads the HTDemucs ONNX manifest at <code>/models/htdemucs/manifest.json</code> and runs separation entirely client-side, so this Vercel deployment only needs the frontend bundle plus static model assets.
         </div>
       </div>
     </div>
