@@ -2965,7 +2965,10 @@ export default function Page() {
           const row = activePatterns[key];
           const stepValue = row?.[scheduledStep] ?? 0;
           const allowed = !activeMute[key] && (!soloEnabled || activeSolo[key]);
-          if (allowed && stepValue >= 0.04) {
+          // Drums: only trigger on real detected onsets (pattern marks them as 1.0).
+          // Other voices: trigger on any meaningful energy.
+          const threshold = key === "drums" ? 0.6 : 0.04;
+          if (allowed && stepValue >= threshold) {
             triggerSequencerSlice(audioContext, key, scheduledStep, scheduledTime, stepValue);
           }
         }
