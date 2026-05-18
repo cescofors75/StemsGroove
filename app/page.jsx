@@ -867,6 +867,25 @@ function buildWaveHeights(count, active, tick = 0) {
   });
 }
 
+function createSoftClipCurve(amount = 1) {
+  const k = Math.max(0.001, amount * 40);
+  const n = 512;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const x = (i * 2) / (n - 1) - 1;
+    curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+  }
+  return curve;
+}
+
+function getSequencerVoiceTone(voiceId) {
+  if (voiceId === "drums") return { hp: 38, lp: 9800, drive: 1.35, pan: 0.08, attack: 0.003, release: 0.08, rateJitter: 0.012 };
+  if (voiceId === "bass") return { hp: 28, lp: 2300, drive: 1.22, pan: 0.02, attack: 0.006, release: 0.16, rateJitter: 0.004 };
+  if (voiceId === "vocals") return { hp: 120, lp: 7600, drive: 1.12, pan: 0.12, attack: 0.008, release: 0.14, rateJitter: 0.008 };
+  if (voiceId === "other") return { hp: 90, lp: 8600, drive: 1.18, pan: 0.16, attack: 0.006, release: 0.12, rateJitter: 0.01 };
+  return { hp: 35, lp: 12000, drive: 1.08, pan: 0.04, attack: 0.006, release: 0.12, rateJitter: 0.006 };
+}
+
 function AnimatedWaveform({ color, active, small = false }) {
   const [tick, setTick] = useState(0);
   const bars = useMemo(() => buildWaveHeights(small ? 24 : 42, active, tick), [small, active, tick]);
@@ -2675,6 +2694,7 @@ export default function Page() {
   const sequencerTimerRef = useRef(null);
   const sequencerAudioCtxRef = useRef(null);
   const sequencerSourcesRef = useRef({});
+  const sequencerMasterBusRef = useRef(null);
   const displayedPatternsRef = useRef({});
   const sequencerMuteRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
   const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
@@ -2775,6 +2795,31 @@ export default function Page() {
     setPlayheadStep(-1);
   }, []);
 
+  const ensureSequencerBus = useCallback((audioContext) => {
+    if (sequencerMasterBusRef.current?.context === audioContext) {
+      return sequencerMasterBusRef.current;
+    }
+
+    const input = audioContext.createGain();
+    const compressor = audioContext.createDynamicsCompressor();
+    compressor.threshold.value = -18;
+    compressor.knee.value = 18;
+    compressor.ratio.value = 3.4;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.18;
+
+    const masterGain = audioContext.createGain();
+    masterGain.gain.value = 0.9;
+
+    input.connect(compressor);
+    compressor.connect(masterGain);
+    masterGain.connect(audioContext.destination);
+
+    const bus = { context: audioContext, input, compressor, masterGain };
+    sequencerMasterBusRef.current = bus;
+    return bus;
+  }, []);
+
   const triggerSequencerSlice = useCallback((audioContext, voiceId, step, time, intensity = 1) => {
     const sourceInfo = sequencerSourcesRef.current[voiceId];
     if (!sourceInfo?.buffer || !sourceInfo.stepDuration) {
@@ -2795,8 +2840,12 @@ export default function Page() {
       return;
     }
 
+    const bus = ensureSequencerBus(audioContext);
+
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
+    const tone = getSequencerVoiceTone(voiceId);
+    source.playbackRate.value = 1 + (Math.random() * 2 - 1) * tone.rateJitter;
 
     const gain = audioContext.createGain();
     const baseGain =
@@ -2809,13 +2858,39 @@ export default function Page() {
     const targetGain = Math.max(0.0001, baseGain * levelScale * (0.4 + intensityScale * 0.75));
 
     gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(targetGain, time + 0.005);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+    gain.gain.exponentialRampToValueAtTime(targetGain, time + tone.attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + duration + tone.release);
+
+    const hp = audioContext.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = tone.hp;
+    hp.Q.value = 0.75;
+
+    const lp = audioContext.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = tone.lp;
+    lp.Q.value = 0.7;
+
+    const saturator = audioContext.createWaveShaper();
+    saturator.curve = createSoftClipCurve(tone.drive * (0.85 + intensityScale * 0.3));
+    saturator.oversample = "2x";
 
     source.connect(gain);
-    gain.connect(audioContext.destination);
+    gain.connect(hp);
+    hp.connect(lp);
+    lp.connect(saturator);
+
+    if (typeof audioContext.createStereoPanner === "function") {
+      const panner = audioContext.createStereoPanner();
+      panner.pan.value = (Math.random() * 2 - 1) * tone.pan;
+      saturator.connect(panner);
+      panner.connect(bus.input);
+    } else {
+      saturator.connect(bus.input);
+    }
+
     source.start(time, offset, duration);
-  }, []);
+  }, [ensureSequencerBus]);
 
   const toggleSequencer = useCallback(async () => {
     if (sequencerPlaying) {
@@ -2840,12 +2915,14 @@ export default function Page() {
 
     if (!sequencerAudioCtxRef.current || sequencerAudioCtxRef.current.state === "closed") {
       sequencerAudioCtxRef.current = new AudioContextClass();
+      sequencerMasterBusRef.current = null;
     }
 
     const audioContext = sequencerAudioCtxRef.current;
     if (audioContext.state === "suspended") {
       await audioContext.resume();
     }
+    ensureSequencerBus(audioContext);
 
     const stepMs = (60_000 / Math.max(1, patternBpm || 120)) / 4;
     let step = 0;
@@ -2876,7 +2953,7 @@ export default function Page() {
 
     tick();
     sequencerTimerRef.current = setInterval(tick, stepMs);
-  }, [patternBpm, patternStatus, sequencerPlaying, stopSequencer, triggerSequencerSlice]);
+  }, [ensureSequencerBus, patternBpm, patternStatus, sequencerPlaying, stopSequencer, triggerSequencerSlice]);
 
   useEffect(() => {
     playingRef.current = playing;
@@ -2969,6 +3046,7 @@ export default function Page() {
       if (sequencerAudioCtxRef.current && sequencerAudioCtxRef.current.state !== "closed") {
         sequencerAudioCtxRef.current.close();
       }
+      sequencerMasterBusRef.current = null;
     };
   }, [stopSequencer]);
 
