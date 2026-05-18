@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { separateTrackInBrowser } from "../lib/client-demixer.js";
+import { separateTrackViaModal } from "../lib/modal-separator.js";
 
 const STEMS = [
   {
@@ -2751,7 +2751,7 @@ export default function Page() {
       const sourceFile = await buildEditedFile();
       setAnalysisFile(sourceFile);
 
-      const nextStems = await separateTrackInBrowser(sourceFile, {
+      const nextStems = await separateTrackViaModal(sourceFile, {
         onProgress: ({ progress: nextProgress, label }) => {
           if (Number.isFinite(nextProgress)) {
             setProgress(Math.max(3, Math.min(96, Math.round(nextProgress))));
@@ -2969,8 +2969,7 @@ export default function Page() {
           </h1>
 
           <p style={{ marginTop: 12, maxWidth: 640, color: "rgba(255,255,255,0.5)", fontSize: 14, lineHeight: 1.6 }}>
-            Upload a full mix and split it into vocals, drums, bass and other using Demucs HTDemucs through
-            built-in Next.js API routes.
+            Upload a full mix and split it into vocals, drums, bass and other using a remote Demucs HTDemucs endpoint on Modal.
           </p>
         </div>
 
@@ -3449,7 +3448,7 @@ export default function Page() {
                 </div>
 
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
-                  Browser mode usa HTDemucs ONNX servido desde /models/htdemucs y ejecuta toda la separacion en el navegador. Esta configuracion ya no usa fallback al backend.
+                  Remote mode envia el audio editado al endpoint de Modal, descarga un ZIP con stems y lo carga en los reproductores y el secuenciador.
                 </div>
               </div>
             )}
@@ -3810,7 +3809,7 @@ export default function Page() {
           <div style={{ fontFamily: "'Space Mono', monospace", letterSpacing: 2, fontSize: 10, marginBottom: 8 }}>
             ENGINE NOTES
           </div>
-          Browser mode loads the HTDemucs ONNX manifest at <code>/models/htdemucs/manifest.json</code> and runs separation entirely client-side, so this Vercel deployment only needs the frontend bundle plus static model assets.
+          This build uses remote separation through Modal. Set <code>NEXT_PUBLIC_MODAL_SEPARATE_URL</code> in Vercel with your deployed endpoint URL to enable processing.
         </div>
       </div>
     </div>
