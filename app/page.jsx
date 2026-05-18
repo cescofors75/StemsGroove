@@ -1714,27 +1714,51 @@ function drawBezierTrend(ctx, chunk, color, isActive, minY, maxY) {
     return;
   }
 
-  ctx.strokeStyle = isActive ? color : `${color}88`;
-  ctx.lineWidth = isActive ? 2.6 : 1.5;
-  ctx.globalAlpha = isActive ? 0.92 : 0.34;
-  ctx.beginPath();
-  ctx.moveTo(chunk[0].x, chunk[0].y);
+  const traceCurve = () => {
+    ctx.beginPath();
+    ctx.moveTo(chunk[0].x, chunk[0].y);
 
-  for (let i = 0; i < chunk.length - 1; i += 1) {
-    const p0 = chunk[Math.max(0, i - 1)];
-    const p1 = chunk[i];
-    const p2 = chunk[i + 1];
-    const p3 = chunk[Math.min(chunk.length - 1, i + 2)];
+    for (let i = 0; i < chunk.length - 1; i += 1) {
+      const p0 = chunk[Math.max(0, i - 1)];
+      const p1 = chunk[i];
+      const p2 = chunk[i + 1];
+      const p3 = chunk[Math.min(chunk.length - 1, i + 2)];
 
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = clamp(p1.y + (p2.y - p0.y) / 6, minY, maxY);
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = clamp(p2.y - (p3.y - p1.y) / 6, minY, maxY);
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = clamp(p1.y + (p2.y - p0.y) / 6, minY, maxY);
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = clamp(p2.y - (p3.y - p1.y) / 6, minY, maxY);
 
-    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
-  }
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+    }
+  };
 
+  // Halo to separate the trend from raw points.
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = isActive ? 5.2 : 2.8;
+  ctx.globalAlpha = isActive ? 0.34 : 0.18;
+  traceCurve();
   ctx.stroke();
+  ctx.restore();
+
+  // Main trend stroke.
+  ctx.strokeStyle = isActive ? color : `${color}aa`;
+  ctx.lineWidth = isActive ? 3.2 : 1.9;
+  ctx.globalAlpha = isActive ? 0.98 : 0.52;
+  traceCurve();
+  ctx.stroke();
+
+  // Subtle dotted accent so user can quickly spot "curve mode".
+  ctx.save();
+  ctx.setLineDash([3, 4]);
+  ctx.strokeStyle = isActive ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.22)";
+  ctx.lineWidth = isActive ? 1.1 : 0.9;
+  ctx.globalAlpha = isActive ? 0.65 : 0.32;
+  traceCurve();
+  ctx.stroke();
+  ctx.restore();
+
   ctx.globalAlpha = 1;
 }
 
@@ -1901,6 +1925,7 @@ function GrooveComparison({ stemUrls }) {
   const [rangeEndPct, setRangeEndPct] = useState(100);
   const [showTrendCurve, setShowTrendCurve] = useState(true);
   const [showRawPoints, setShowRawPoints] = useState(true);
+  const [zoomDrag, setZoomDrag] = useState(null);
   const [onsetTooltip, setOnsetTooltip] = useState(null);
   const [deviationTooltip, setDeviationTooltip] = useState(null);
   const comparisonCanvasRef = useRef(null);
@@ -2019,6 +2044,27 @@ function GrooveComparison({ stemUrls }) {
   const selectedUseful = selectedSeries.filter((item) => item?.selected && item?.stats?.hasUsefulGroove);
   const activeStem = selectedSeries.find((item) => item?.id === activeStemId && item?.selected && item?.stats?.hasUsefulGroove) || selectedUseful[0] || null;
   const grooveInsights = useMemo(() => buildGrooveInsights(selectedSeries, activeStemId), [activeStemId, selectedSeries]);
+
+  const applyDragZoom = useCallback((startX, endX, width) => {
+    if (!Number.isFinite(startX) || !Number.isFinite(endX) || !Number.isFinite(width) || width <= 0) {
+      return;
+    }
+    const leftPx = Math.max(0, Math.min(startX, endX));
+    const rightPx = Math.min(width, Math.max(startX, endX));
+    const deltaPx = rightPx - leftPx;
+    if (deltaPx < 14) {
+      return;
+    }
+
+    let nextStart = Math.round((leftPx / width) * 100);
+    let nextEnd = Math.round((rightPx / width) * 100);
+    if (nextEnd - nextStart < 5) {
+      nextEnd = Math.min(100, nextStart + 5);
+    }
+
+    setRangeStartPct(Math.max(0, Math.min(95, nextStart)));
+    setRangeEndPct(Math.max(5, Math.min(100, nextEnd)));
+  }, []);
 
   if (!availableStems.length) {
     return null;
@@ -2275,7 +2321,13 @@ function GrooveComparison({ stemUrls }) {
 
           <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-              <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1 }}>DESVIACIONES DE GROOVE · puntos reales + curva tendencia</div>
+              <div style={{ display: "grid", gap: 4 }}>
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1 }}>DESVIACIONES DE GROOVE · puntos reales + curva tendencia</div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 10, color: GC_TEXT_SOFT }}>
+                  <span>● puntos reales</span>
+                  <span>⋯ curva Bézier</span>
+                </div>
+              </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: GC_TEXT_SOFT, fontFamily: "'Space Mono', monospace" }}>
                   <input
@@ -2299,10 +2351,23 @@ function GrooveComparison({ stemUrls }) {
               <canvas
                 ref={deviationCanvasRef}
                 style={{ width: "100%", height: 220, display: "block" }}
+                onMouseDown={(event) => {
+                  if (event.button !== 0) {
+                    return;
+                  }
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const x = event.clientX - rect.left;
+                  setZoomDrag({ startX: x, currentX: x, width: rect.width });
+                  setDeviationTooltip(null);
+                }}
                 onMouseMove={(event) => {
                   const rect = event.currentTarget.getBoundingClientRect();
                   const x = event.clientX - rect.left;
                   const y = event.clientY - rect.top;
+                  if (zoomDrag) {
+                    setZoomDrag((prev) => (prev ? { ...prev, currentX: x, width: rect.width } : prev));
+                    return;
+                  }
                   const hit = deviationPointsRef.current
                     .filter((point) => Math.abs(point.x - x) <= 6)
                     .sort((a, b) => Math.abs(a.y - y) - Math.abs(b.y - y))[0];
@@ -2321,8 +2386,40 @@ function GrooveComparison({ stemUrls }) {
                     color: hit.color,
                   });
                 }}
-                onMouseLeave={() => setDeviationTooltip(null)}
+                onMouseUp={(event) => {
+                  if (!zoomDrag) {
+                    return;
+                  }
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const x = event.clientX - rect.left;
+                  applyDragZoom(zoomDrag.startX, x, rect.width || zoomDrag.width);
+                  setZoomDrag(null);
+                }}
+                onMouseLeave={(event) => {
+                  if (zoomDrag) {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const x = event.clientX - rect.left;
+                    applyDragZoom(zoomDrag.startX, x, rect.width || zoomDrag.width);
+                    setZoomDrag(null);
+                  }
+                  setDeviationTooltip(null);
+                }}
               />
+              {zoomDrag && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    bottom: 0,
+                    left: Math.max(0, Math.min(zoomDrag.startX, zoomDrag.currentX)),
+                    width: Math.max(1, Math.abs((zoomDrag.currentX ?? zoomDrag.startX) - zoomDrag.startX)),
+                    background: "rgba(90,163,232,0.18)",
+                    borderLeft: "1px solid rgba(142,198,242,0.95)",
+                    borderRight: "1px solid rgba(142,198,242,0.95)",
+                    pointerEvents: "none",
+                  }}
+                />
+              )}
               {deviationTooltip && (
                 <div
                   style={{
