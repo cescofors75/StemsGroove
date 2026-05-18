@@ -6,6 +6,7 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
     .pip_install(
+        "numpy<2",
         "demucs==4.0.1",
         "torch==2.1.2",
         "torchaudio==2.1.2",

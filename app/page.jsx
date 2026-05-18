@@ -2064,6 +2064,7 @@ export default function Page() {
   const [analysisFile, setAnalysisFile] = useState(null);
 
   const audioRef = useRef(null);
+  const currentAudioSourceRef = useRef({ id: null, url: "" });
   const fileRef = useRef(null);
   const waveformCanvasRef = useRef(null);
   const editorDragRef = useRef(null);
@@ -2274,9 +2275,18 @@ export default function Page() {
 
   useEffect(() => {
     const audio = new Audio();
+    audio.preload = "auto";
     audioRef.current = audio;
 
     const onEnded = () => setPlaying(null);
+    const onError = () => {
+      const mediaError = audio.error;
+      const details = mediaError
+        ? ` (code ${mediaError.code}${mediaError.message ? `: ${mediaError.message}` : ""})`
+        : "";
+      setError(`No se pudo cargar/reproducir el audio${details}.`);
+      setPlaying(null);
+    };
     const onPause = () => {
       if (playing !== "original-preview") {
         setPreviewPosition(null);
@@ -2288,6 +2298,7 @@ export default function Page() {
       }
     };
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("timeupdate", onTimeUpdate);
 
@@ -2295,6 +2306,7 @@ export default function Page() {
       audio.pause();
       audio.src = "";
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("timeupdate", onTimeUpdate);
     };
@@ -2508,22 +2520,43 @@ export default function Page() {
       stopSequencer();
     }
 
-    if (playing === sourceId && !player.paused) {
-      player.pause();
-      setPlaying(null);
+    if (playing === sourceId) {
+      if (!player.paused) {
+        player.pause();
+        setPlaying(null);
+        return;
+      }
+
+      try {
+        player.volume = volume;
+        player.muted = false;
+        await player.play();
+        setPlaying(sourceId);
+      } catch (error) {
+        const details = error instanceof Error ? `: ${error.message}` : "";
+        setError(`No se pudo reanudar la reproduccion${details}`);
+      }
       return;
     }
 
     player.pause();
-    player.src = sourceUrl;
+    const sourceChanged = currentAudioSourceRef.current.url !== sourceUrl;
+    if (sourceChanged) {
+      player.src = sourceUrl;
+      player.load();
+      currentAudioSourceRef.current = { id: sourceId, url: sourceUrl };
+    }
     player.currentTime = 0;
     player.volume = volume;
+    player.muted = false;
 
     try {
       await player.play();
       setPlaying(sourceId);
-    } catch {
-      setError("No se pudo iniciar la reproduccion.");
+    } catch (error) {
+      const details = error instanceof Error ? `: ${error.message}` : "";
+      setError(`No se pudo iniciar la reproduccion${details}`);
+      setPlaying(null);
     }
   };
 
@@ -2642,6 +2675,7 @@ export default function Page() {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
+      currentAudioSourceRef.current = { id: null, url: "" };
     }
 
     loadEditorBuffer(incoming)
@@ -2710,6 +2744,7 @@ export default function Page() {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
+      currentAudioSourceRef.current = { id: null, url: "" };
     }
   };
 
