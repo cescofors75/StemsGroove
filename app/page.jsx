@@ -2851,7 +2851,9 @@ export default function Page() {
 
     const offset = step * sourceInfo.stepDuration;
     const maxDuration = Math.max(0, sourceInfo.buffer.duration - offset);
-    const duration = Math.min(sourceInfo.stepDuration, maxDuration);
+    // Drums: short percussive slice so consecutive hits don't bleed into each other.
+    const durationCap = voiceId === "drums" ? sourceInfo.stepDuration * 0.55 : sourceInfo.stepDuration;
+    const duration = Math.min(durationCap, maxDuration);
     if (duration < 0.02) {
       return;
     }
