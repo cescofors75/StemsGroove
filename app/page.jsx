@@ -397,6 +397,7 @@ function buildStepPattern(mono, sampleRate, bpm, steps = 16, bars = 1) {
   const { analysisDuration, stepDuration } = getPatternWindow(availableSeconds, bpm, steps, bars);
   const onsetTimes = detectStemOnsets(mono, sampleRate, analysisDuration);
   const pattern = Array.from({ length: steps }).map(() => 0);
+  const onsetSteps = Array.from({ length: steps }).map(() => false);
 
   for (let step = 0; step < steps; step += 1) {
     const start = Math.floor(step * stepDuration * sampleRate);
@@ -412,12 +413,19 @@ function buildStepPattern(mono, sampleRate, bpm, steps = 16, bars = 1) {
     if (onset < 0 || onset > analysisDuration) {
       continue;
     }
-    const step = Math.max(0, Math.min(steps - 1, Math.round(onset / stepDuration)));
-    pattern[step] = Math.max(pattern[step], 1);
+    const stepPosition = Math.min(steps - 1, Math.max(0, onset / stepDuration));
+    const step = Math.max(0, Math.min(steps - 1, Math.floor(stepPosition + 1e-6)));
+    onsetSteps[step] = true;
   }
 
-  const maxValue = Math.max(...pattern, 1e-9);
-  return pattern.map((value) => Math.max(0, Math.min(1, value / maxValue)));
+  const gatedPattern = pattern.map((value, index) => (onsetSteps[index] ? value : 0));
+  const maxValue = Math.max(...gatedPattern, 1e-9);
+  return gatedPattern.map((value, index) => {
+    if (!onsetSteps[index]) {
+      return 0;
+    }
+    return Math.max(0, Math.min(1, value / maxValue));
+  });
 }
 
 function countHits(pattern = []) {
