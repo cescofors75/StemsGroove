@@ -856,6 +856,91 @@ function grooveDownload(filename, content, type) {
   URL.revokeObjectURL(a.href);
 }
 
+function midiVarLen(value) {
+  let buffer = value & 0x7f;
+  const bytes = [];
+  while ((value >>= 7)) {
+    buffer <<= 8;
+    buffer |= (value & 0x7f) | 0x80;
+  }
+  while (true) {
+    bytes.push(buffer & 0xff);
+    if (buffer & 0x80) {
+      buffer >>= 8;
+    } else {
+      break;
+    }
+  }
+  return bytes;
+}
+
+function midiAscii(text) {
+  return Array.from(text).map((char) => char.charCodeAt(0) & 0x7f);
+}
+
+function midiChunk(id, data) {
+  const length = data.length;
+  return [
+    ...midiAscii(id),
+    (length >>> 24) & 0xff,
+    (length >>> 16) & 0xff,
+    (length >>> 8) & 0xff,
+    length & 0xff,
+    ...data,
+  ];
+}
+
+function buildMidiTrack(trackName, channel, note, steps, bpm, level = 100) {
+  const ppq = 480;
+  const stepTicks = ppq / 4;
+  const noteLength = Math.max(24, Math.round(stepTicks * 0.72));
+  const events = [];
+  let lastTick = 0;
+
+  events.push(...midiVarLen(0), 0xff, 0x03, trackName.length, ...midiAscii(trackName));
+  if (channel !== 9) {
+    events.push(...midiVarLen(0), 0xc0 | (channel & 0x0f), 0x00);
+  }
+
+  steps.forEach((stepValue, index) => {
+    const threshold = trackName === "drums" ? 0.6 : 0.04;
+    if (stepValue < threshold) {
+      return;
+    }
+    const tick = index * stepTicks;
+    const velocity = Math.max(1, Math.min(127, Math.round(stepValue * (level / 100) * 127)));
+    events.push(...midiVarLen(tick - lastTick), 0x90 | (channel & 0x0f), note, velocity);
+    events.push(...midiVarLen(noteLength), 0x80 | (channel & 0x0f), note, 0x00);
+    lastTick = tick + noteLength;
+  });
+
+  events.push(...midiVarLen(0), 0xff, 0x2f, 0x00);
+  return midiChunk("MTrk", events);
+}
+
+function buildMidiTempoTrack(bpm = 120) {
+  const mpqn = Math.max(1, Math.round(60000000 / Math.max(1, bpm)));
+  const data = [
+    ...midiVarLen(0), 0xff, 0x03, 0x05, ...midiAscii("tempo"),
+    ...midiVarLen(0), 0xff, 0x51, 0x03,
+    (mpqn >>> 16) & 0xff,
+    (mpqn >>> 8) & 0xff,
+    mpqn & 0xff,
+    ...midiVarLen(0), 0xff, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08,
+    ...midiVarLen(0), 0xff, 0x2f, 0x00,
+  ];
+  return midiChunk("MTrk", data);
+}
+
+function buildSequencerMidiFile({ bpm = 120, tracks = [] }) {
+  const header = midiChunk("MThd", [0x00, 0x01, 0x00, tracks.length + 1, 0x01, 0xe0]);
+  const chunks = [header, buildMidiTempoTrack(bpm)];
+  tracks.forEach((track) => {
+    chunks.push(buildMidiTrack(track.id, track.channel, track.note, track.steps, bpm, track.level));
+  });
+  return new Uint8Array(chunks.flat());
+}
+
 function buildWaveHeights(count, active, tick = 0) {
   return Array.from({ length: count }).map((_, i) => {
     if (active) {
@@ -2831,6 +2916,50 @@ export default function Page() {
     setPlayheadStep(-1);
   }, []);
 
+  const exportSequencerMidi = useCallback(() => {
+    if (patternStatus !== "done") {
+      return;
+    }
+
+    const soloEnabled = hasSequencerSolo;
+    const trackDefs = [
+      { id: "original", note: 60, channel: 0 },
+      { id: "drums", note: 36, channel: 9 },
+      { id: "bass", note: 40, channel: 1 },
+      { id: "vocals", note: 67, channel: 2 },
+      { id: "other", note: 72, channel: 3 },
+    ];
+    const tracks = trackDefs
+      .filter(({ id }) => {
+        const hasSteps = Boolean(displayedPatterns[id]?.length);
+        const allowed = !sequencerMute[id] && (!soloEnabled || sequencerSolo[id]);
+        if (id === "original") {
+          const anyStemActive = STEMS.some((stem) => {
+            const stemHasSteps = Boolean(displayedPatterns[stem.id]?.length);
+            return stemHasSteps && !sequencerMute[stem.id] && (!soloEnabled || sequencerSolo[stem.id]);
+          });
+          return hasSteps && allowed && !anyStemActive;
+        }
+        return hasSteps && allowed;
+      })
+      .map(({ id, note, channel }) => ({
+        id,
+        note,
+        channel,
+        steps: displayedPatterns[id],
+        level: sequencerLevels[id] ?? 100,
+      }));
+
+    if (!tracks.length) {
+      setPatternError("No hay pistas activas para exportar a MIDI.");
+      setPatternStatus("error");
+      return;
+    }
+
+    const midi = buildSequencerMidiFile({ bpm: patternBpm || 120, tracks });
+    grooveDownload(`${baseName || "track"}-sequencer.mid`, midi, "audio/midi");
+  }, [baseName, displayedPatterns, hasSequencerSolo, patternBpm, patternStatus, sequencerLevels, sequencerMute, sequencerSolo]);
+
   const ensureSequencerBus = useCallback((audioContext) => {
     if (sequencerMasterBusRef.current?.context === audioContext) {
       return sequencerMasterBusRef.current;
@@ -4636,6 +4765,23 @@ export default function Page() {
                       }}
                     >
                       {sequencerPlaying ? "PAUSE SEQ" : "PLAY SEQ"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportSequencerMidi}
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.25)",
+                        color: "rgba(255,255,255,0.78)",
+                        background: "transparent",
+                        borderRadius: 999,
+                        fontSize: 10,
+                        letterSpacing: 1,
+                        padding: "4px 10px",
+                        cursor: "pointer",
+                        fontFamily: "'Space Mono', monospace",
+                      }}
+                    >
+                      EXPORT MIDI
                     </button>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
                       {[
