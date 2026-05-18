@@ -2693,7 +2693,7 @@ export default function Page() {
   const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85 });
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
   const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
-  const [sequencerLevels, setSequencerLevels] = useState({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
+  const [sequencerLevels, setSequencerLevels] = useState({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
   const [editorDuration, setEditorDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
@@ -2722,7 +2722,7 @@ export default function Page() {
   const displayedPatternsRef = useRef({});
   const sequencerMuteRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
   const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
-  const sequencerLevelsRef = useRef({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
+  const sequencerLevelsRef = useRef({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
   const hasSequencerSoloRef = useRef(false);
   const trimToastTimerRef = useRef(null);
 
@@ -2836,7 +2836,7 @@ export default function Page() {
       return sequencerMasterBusRef.current;
     }
     const input = audioContext.createGain();
-    input.gain.value = 0.9;
+    input.gain.value = 0.75;
     input.connect(audioContext.destination);
     const bus = { context: audioContext, input };
     sequencerMasterBusRef.current = bus;
@@ -2851,7 +2851,7 @@ export default function Page() {
 
     const offset = step * sourceInfo.stepDuration;
     const maxDuration = Math.max(0, sourceInfo.buffer.duration - offset);
-    const duration = Math.min(sourceInfo.stepDuration * 0.9, maxDuration);
+    const duration = Math.min(sourceInfo.stepDuration, maxDuration);
     if (duration < 0.02) {
       return;
     }
@@ -2868,23 +2868,18 @@ export default function Page() {
       }
     }
 
-    const baseGain =
-      voiceId === "drums" ? 0.85 :
-      voiceId === "bass" ? 0.75 :
-      voiceId === "vocals" ? 0.6 :
-      voiceId === "other" ? 0.65 :
-      0.55;
     const levelScale = Math.max(0, Math.min(1, (sequencerLevelsRef.current[voiceId] ?? 85) / 100));
-    const vol = baseGain * levelScale * Math.max(0.1, Math.min(1, intensity));
+    const vol = levelScale * Math.max(0.1, Math.min(1, intensity));
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
     source.playbackRate.value = 1;
 
     const gain = audioContext.createGain();
+    const fadeOut = Math.min(0.008, duration * 0.1);
     gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.linearRampToValueAtTime(vol, time + 0.003);
-    gain.gain.setValueAtTime(vol, time + Math.max(0.003, duration - 0.02));
+    gain.gain.linearRampToValueAtTime(vol, time + 0.001);
+    gain.gain.setValueAtTime(vol, time + Math.max(0.001, duration - fadeOut));
     gain.gain.linearRampToValueAtTime(0.0001, time + duration);
 
     const bus = ensureSequencerBus(audioContext);
