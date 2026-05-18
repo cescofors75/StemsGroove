@@ -622,6 +622,7 @@ function grooveBuildMap(buffer, bpm, subdivision, thr) {
     }
   }
   const mapped = map.filter((v) => v !== null);
+  const mappedValues = mapped;
   const minDev = mapped.length ? Math.min(...mapped) : 0;
   const maxDev = mapped.length ? Math.max(...mapped.map(Math.abs)) : 0;
   const avgDev = mapped.length ? mapped.reduce((a, b) => a + Math.abs(b), 0) / mapped.length : 0;
@@ -630,6 +631,38 @@ function grooveBuildMap(buffer, bpm, subdivision, thr) {
     ? deviations.reduce((sum, value) => sum + (value - deviationMean) ** 2, 0) / deviations.length
     : 0;
   const deviationStd = Math.sqrt(deviationVariance);
+  const mappedBiasMs = mappedValues.length ? mappedValues.reduce((sum, value) => sum + value, 0) / mappedValues.length : 0;
+  const mappedStdMs = mappedValues.length
+    ? Math.sqrt(mappedValues.reduce((sum, value) => sum + (value - mappedBiasMs) ** 2, 0) / mappedValues.length)
+    : 0;
+  const meanAbsDevMs = mappedValues.length ? mappedValues.reduce((sum, value) => sum + Math.abs(value), 0) / mappedValues.length : 0;
+  const coverage = numSteps > 0 ? mappedValues.length / numSteps : 0;
+  const iois = [];
+  for (let i = 1; i < onsets.length; i += 1) {
+    const ioi = onsets[i] - onsets[i - 1];
+    if (ioi > 0) {
+      iois.push(ioi);
+    }
+  }
+  const ioiMean = iois.length ? iois.reduce((sum, value) => sum + value, 0) / iois.length : 0;
+  const ioiStd = iois.length
+    ? Math.sqrt(iois.reduce((sum, value) => sum + (value - ioiMean) ** 2, 0) / iois.length)
+    : 0;
+  const ioiStability = ioiMean > 0 ? ioiStd / ioiMean : 0;
+
+  const oddIois = iois.filter((_, index) => index % 2 === 1);
+  const evenIois = iois.filter((_, index) => index % 2 === 0);
+  const swingRatio = oddIois.length >= 2 && evenIois.length >= 2 ? median(oddIois) / Math.max(0.0001, median(evenIois)) : null;
+
+  const devNorm = clamp(meanAbsDevMs / 40, 0, 1);
+  const stdNorm = clamp(mappedStdMs / 30, 0, 1);
+  const biasNorm = clamp(Math.abs(mappedBiasMs) / 25, 0, 1);
+  const covNorm = clamp(coverage, 0, 1);
+  const pocketScore = Math.round(100 * (0.45 * (1 - devNorm) + 0.3 * (1 - stdNorm) + 0.15 * (1 - biasNorm) + 0.1 * covNorm));
+  const grooveClass = meanAbsDevMs <= 12 && mappedStdMs <= 9 ? "tight" : meanAbsDevMs <= 22 && mappedStdMs <= 16 ? "natural" : "loose";
+  const timingTrend = mappedBiasMs <= -6 ? "adelantado" : mappedBiasMs >= 6 ? "atrasado" : "centrado";
+  const stabilityLevel = mappedStdMs <= 9 ? "alta" : mappedStdMs <= 16 ? "media" : "baja";
+
   const uniqueRoundedCount = new Set(mapped.map((value) => Math.round(value))).size;
   const hasUsefulGroove = mapped.length >= 2 && deviationStd >= 2.5 && uniqueRoundedCount >= 1;
   return {
@@ -643,9 +676,75 @@ function grooveBuildMap(buffer, bpm, subdivision, thr) {
     avgDev,
     mappedCount: mapped.length,
     deviationStd,
+    meanAbsDevMs,
+    biasMs: mappedBiasMs,
+    mappedStdMs,
+    coverage,
+    ioiStability,
+    swingRatio,
+    pocketScore,
+    grooveClass,
+    timingTrend,
+    stabilityLevel,
     uniqueRoundedCount,
     hasUsefulGroove,
   };
+}
+
+function buildGrooveInsights(selectedSeries, activeStemId) {
+  const usable = (selectedSeries || []).filter((series) => series?.selected && series?.stats?.hasUsefulGroove);
+  if (!usable.length) {
+    return [];
+  }
+
+  const active = usable.find((series) => series.id === activeStemId) || usable[0];
+  const activeStats = active.stats || {};
+  const insights = [];
+
+  insights.push({
+    tone: activeStats.pocketScore >= 80 ? "good" : activeStats.pocketScore >= 60 ? "neutral" : "warn",
+    text: `${active.label}: pocket ${activeStats.pocketScore ?? 0}/100, tendencia ${activeStats.timingTrend || "centrado"}, estabilidad ${activeStats.stabilityLevel || "media"}.`,
+  });
+
+  if (Number.isFinite(activeStats.swingRatio)) {
+    insights.push({
+      tone: "neutral",
+      text: `${active.label}: swing ratio ${(activeStats.swingRatio || 0).toFixed(2)} (1.00 es recto).`,
+    });
+  }
+
+  const leader = [...usable].sort((a, b) => {
+    const scoreA = (a.stats?.coverage || 0) * 100 - (a.stats?.mappedStdMs || 0);
+    const scoreB = (b.stats?.coverage || 0) * 100 - (b.stats?.mappedStdMs || 0);
+    return scoreB - scoreA;
+  })[0];
+  if (leader) {
+    insights.push({
+      tone: "neutral",
+      text: `Stem guía probable: ${leader.label} (coverage ${(leader.stats.coverage * 100).toFixed(0)}%, var ${leader.stats.mappedStdMs.toFixed(1)} ms).`,
+    });
+  }
+
+  const drums = usable.find((series) => series.id === "drums");
+  const bass = usable.find((series) => series.id === "bass");
+  if (drums && bass) {
+    const delta = (bass.stats?.biasMs || 0) - (drums.stats?.biasMs || 0);
+    if (Math.abs(delta) >= 6) {
+      insights.push({
+        tone: "warn",
+        text: `Desfase drums vs bass: ${delta > 0 ? "bass más tarde" : "bass más temprano"} (${Math.abs(delta).toFixed(1)} ms).`,
+      });
+    }
+  }
+
+  if ((activeStats.coverage || 0) < 0.25) {
+    insights.push({
+      tone: "warn",
+      text: `Cobertura baja (${((activeStats.coverage || 0) * 100).toFixed(0)}%): interpreta este análisis con cautela.`,
+    });
+  }
+
+  return insights.slice(0, 4);
 }
 
 function grooveDrawGrid(map, numSteps, canvas) {
@@ -1844,6 +1943,7 @@ function GrooveComparison({ stemUrls }) {
 
   const selectedUseful = selectedSeries.filter((item) => item?.selected && item?.stats?.hasUsefulGroove);
   const activeStem = selectedSeries.find((item) => item?.id === activeStemId && item?.selected && item?.stats?.hasUsefulGroove) || selectedUseful[0] || null;
+  const grooveInsights = useMemo(() => buildGrooveInsights(selectedSeries, activeStemId), [activeStemId, selectedSeries]);
 
   if (!availableStems.length) {
     return null;
@@ -2011,6 +2111,36 @@ function GrooveComparison({ stemUrls }) {
               </div>
             ))}
           </div>
+
+          {activeStem && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+              {[
+                { label: "POCKET", value: `${activeStem.stats.pocketScore ?? 0}/100` },
+                { label: "SESGO", value: `${(activeStem.stats.biasMs ?? 0).toFixed(1)} ms` },
+                { label: "ESTABILIDAD", value: `${(activeStem.stats.mappedStdMs ?? 0).toFixed(1)} ms` },
+                { label: "COBERTURA", value: `${Math.round((activeStem.stats.coverage ?? 0) * 100)}%` },
+                { label: "SWING", value: Number.isFinite(activeStem.stats.swingRatio) ? activeStem.stats.swingRatio.toFixed(2) : "-" },
+              ].map((metric) => (
+                <div key={`kpi-${metric.label}`} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.14)", borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SOFT, letterSpacing: 1, marginBottom: 4 }}>{metric.label}</div>
+                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 16, color: GC_TEXT_PRIMARY }}>{metric.value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {grooveInsights.length > 0 && (
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.14)", borderRadius: 8, padding: "10px 12px", display: "grid", gap: 8 }}>
+              <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1 }}>
+                INSIGHTS
+              </div>
+              {grooveInsights.map((insight, index) => (
+                <div key={`insight-${index}`} style={{ fontSize: 11, lineHeight: 1.5, color: insight.tone === "warn" ? "#f6c26b" : insight.tone === "good" ? "#83d9bf" : GC_TEXT_SECONDARY }}>
+                  {insight.text}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
             <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1, marginBottom: 8 }}>ONSETS SUPERPUESTOS</div>
