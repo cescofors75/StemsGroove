@@ -8,36 +8,36 @@ const STEMS = [
     id: "vocals",
     label: "VOCALS",
     icon: "MIC",
-    color: "#e8c547",
-    bg: "rgba(232,197,71,0.08)",
-    border: "rgba(232,197,71,0.3)",
+    color: "#e69f00",
+    bg: "rgba(230,159,0,0.1)",
+    border: "rgba(230,159,0,0.42)",
     desc: "Lead and backing vocals",
   },
   {
     id: "drums",
     label: "DRUMS",
     icon: "DRM",
-    color: "#e85447",
-    bg: "rgba(232,84,71,0.08)",
-    border: "rgba(232,84,71,0.3)",
+    color: "#cc79a7",
+    bg: "rgba(204,121,167,0.1)",
+    border: "rgba(204,121,167,0.42)",
     desc: "Kick, snare, hats and percussion",
   },
   {
     id: "bass",
     label: "BASS",
     icon: "BSS",
-    color: "#47b8e8",
-    bg: "rgba(71,184,232,0.08)",
-    border: "rgba(71,184,232,0.3)",
+    color: "#56b4e9",
+    bg: "rgba(86,180,233,0.1)",
+    border: "rgba(86,180,233,0.42)",
     desc: "Bass and low frequency content",
   },
   {
     id: "other",
     label: "OTHER",
     icon: "OTH",
-    color: "#78d870",
-    bg: "rgba(120,216,112,0.08)",
-    border: "rgba(120,216,112,0.3)",
+    color: "#009e73",
+    bg: "rgba(0,158,115,0.1)",
+    border: "rgba(0,158,115,0.42)",
     desc: "Guitars, synths and remaining layers",
   },
 ];
@@ -109,6 +109,13 @@ function formatSeconds(seconds) {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function formatMsFromSeconds(seconds) {
+  if (!Number.isFinite(seconds)) {
+    return "0";
+  }
+  return Math.round(seconds * 1000).toString();
 }
 
 function clamp(value, min, max) {
@@ -1545,7 +1552,7 @@ function GrooveExtractor({ stemUrl, stemLabel = "STEM" }) {
   );
 }
 
-function drawGrooveComparison(onsetSeries, canvas, activeStemId) {
+function drawGrooveComparison(onsetSeries, canvas, activeStemId, viewStart = 0, viewEnd = 1) {
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(1, canvas.offsetWidth || 720);
@@ -1558,18 +1565,27 @@ function drawGrooveComparison(onsetSeries, canvas, activeStemId) {
 
   const activeSeries = (onsetSeries || []).filter((item) => item?.selected);
   const maxDuration = Math.max(...activeSeries.map((item) => item.duration || 0), 1);
+  const clampedStart = Math.min(0.98, Math.max(0, viewStart));
+  const clampedEnd = Math.min(1, Math.max(clampedStart + 0.02, viewEnd));
+  const windowStart = maxDuration * clampedStart;
+  const windowEnd = maxDuration * clampedEnd;
+  const visibleDuration = Math.max(0.001, windowEnd - windowStart);
   const rowHeight = Math.max(28, (height - 24) / Math.max(activeSeries.length, 1));
+  const points = [];
 
   activeSeries.forEach((series, index) => {
     const isActive = series.id === activeStemId;
     const y = 16 + index * rowHeight;
     ctx.fillStyle = "rgba(255,255,255,0.05)";
     ctx.fillRect(0, y - 10, width, 1);
-    ctx.fillStyle = isActive ? series.color : "rgba(255,255,255,0.45)";
+    ctx.fillStyle = isActive ? series.color : "rgba(255,255,255,0.62)";
     ctx.font = isActive ? "700 10px monospace" : "10px monospace";
     ctx.fillText(series.label, 8, y - 2);
     for (const onset of series.onsets || []) {
-      const x = 72 + (onset / maxDuration) * Math.max(1, width - 88);
+      if (onset < windowStart || onset > windowEnd) {
+        continue;
+      }
+      const x = 72 + ((onset - windowStart) / visibleDuration) * Math.max(1, width - 88);
       ctx.strokeStyle = isActive ? series.color : `${series.color}55`;
       ctx.lineWidth = isActive ? 3.2 : 1.5;
       ctx.globalAlpha = isActive ? 1 : 0.35;
@@ -1578,11 +1594,23 @@ function drawGrooveComparison(onsetSeries, canvas, activeStemId) {
       ctx.lineTo(x, y + rowHeight - 10);
       ctx.stroke();
       ctx.globalAlpha = 1;
+      points.push({
+        kind: "onset",
+        stemId: series.id,
+        stemLabel: series.label,
+        color: series.color,
+        onset,
+        x,
+        yTop: y + 2,
+        yBottom: y + rowHeight - 10,
+      });
     }
   });
+
+  return { points, maxDuration, windowStart, windowEnd };
 }
 
-function drawGrooveDeviationComparison(seriesList, canvas, activeStemId) {
+function drawGrooveDeviationComparison(seriesList, canvas, activeStemId, viewStart = 0, viewEnd = 1) {
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(1, canvas.offsetWidth || 720);
@@ -1600,21 +1628,31 @@ function drawGrooveDeviationComparison(seriesList, canvas, activeStemId) {
   const padY = 18;
   const midY = height / 2;
   const stepCount = Math.max(...activeSeries.map((item) => item.map?.length || 0), 16);
-  const cellW = (width - padX * 2) / stepCount;
+  const clampedStart = Math.min(0.98, Math.max(0, viewStart));
+  const clampedEnd = Math.min(1, Math.max(clampedStart + 0.02, viewEnd));
+  const startStep = Math.max(0, Math.floor(stepCount * clampedStart));
+  const endStep = Math.max(startStep + 1, Math.ceil(stepCount * clampedEnd));
+  const visibleSteps = Math.max(1, endStep - startStep);
+  const cellW = (width - padX * 2) / visibleSteps;
+  const points = [];
 
-  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  ctx.strokeStyle = "rgba(255,255,255,0.45)";
+  ctx.lineWidth = 1.6;
   ctx.beginPath();
   ctx.moveTo(padX, midY);
   ctx.lineTo(width - padX, midY);
   ctx.stroke();
-  ctx.fillStyle = "rgba(255,255,255,0.38)";
+  ctx.fillStyle = "rgba(255,255,255,0.72)";
   ctx.font = "10px monospace";
   ctx.fillText("early", 6, 20);
   ctx.fillText("late", 10, height - 12);
+  ctx.fillStyle = "rgba(255,255,255,0.82)";
+  ctx.fillText("0 ms", width - padX + 6, midY + 3);
 
-  for (let i = 0; i < stepCount; i += 4) {
-    const x = padX + i * cellW;
+  for (let i = startStep; i < endStep; i += 4) {
+    const x = padX + (i - startStep) * cellW;
     ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(x, padY);
     ctx.lineTo(x, height - padY);
@@ -1643,11 +1681,14 @@ function drawGrooveDeviationComparison(seriesList, canvas, activeStemId) {
     ctx.beginPath();
     let started = false;
     (series.map || []).forEach((value, index) => {
+      if (index < startStep || index >= endStep) {
+        return;
+      }
       if (value === null) {
         started = false;
         return;
       }
-      const x = padX + index * cellW + cellW / 2;
+      const x = padX + (index - startStep) * cellW + cellW / 2;
       const y = midY - (value / maxAbs) * (midY - padY - 8);
       if (!started) {
         ctx.moveTo(x, y);
@@ -1655,10 +1696,22 @@ function drawGrooveDeviationComparison(seriesList, canvas, activeStemId) {
       } else {
         ctx.lineTo(x, y);
       }
+      points.push({
+        kind: "deviation",
+        stemId: series.id,
+        stemLabel: series.label,
+        color: series.color,
+        step: index + 1,
+        value,
+        x,
+        y,
+      });
     });
     ctx.stroke();
     ctx.globalAlpha = 1;
   });
+
+  return { points, stepCount, startStep, endStep };
 }
 
 function GrooveComparison({ stemUrls }) {
@@ -1669,8 +1722,14 @@ function GrooveComparison({ stemUrls }) {
   const [grooveData, setGrooveData] = useState({});
   const [selectedStems, setSelectedStems] = useState({ drums: true, bass: true, vocals: true, other: true });
   const [activeStemId, setActiveStemId] = useState("drums");
+  const [rangeStartPct, setRangeStartPct] = useState(0);
+  const [rangeEndPct, setRangeEndPct] = useState(100);
+  const [onsetTooltip, setOnsetTooltip] = useState(null);
+  const [deviationTooltip, setDeviationTooltip] = useState(null);
   const comparisonCanvasRef = useRef(null);
   const deviationCanvasRef = useRef(null);
+  const onsetPointsRef = useRef([]);
+  const deviationPointsRef = useRef([]);
 
   const availableStems = useMemo(() => STEMS.filter((stem) => stemUrls?.[stem.id]), [stemUrls]);
 
@@ -1769,9 +1828,13 @@ function GrooveComparison({ stemUrls }) {
   );
 
   useEffect(() => {
-    drawGrooveComparison(selectedSeries, comparisonCanvasRef.current, activeStemId);
-    drawGrooveDeviationComparison(selectedSeries, deviationCanvasRef.current, activeStemId);
-  }, [activeStemId, selectedSeries]);
+    const viewStart = rangeStartPct / 100;
+    const viewEnd = rangeEndPct / 100;
+    const onsetResult = drawGrooveComparison(selectedSeries, comparisonCanvasRef.current, activeStemId, viewStart, viewEnd);
+    const deviationResult = drawGrooveDeviationComparison(selectedSeries, deviationCanvasRef.current, activeStemId, viewStart, viewEnd);
+    onsetPointsRef.current = onsetResult?.points || [];
+    deviationPointsRef.current = deviationResult?.points || [];
+  }, [activeStemId, rangeEndPct, rangeStartPct, selectedSeries]);
 
   const selectedUseful = selectedSeries.filter((item) => item?.selected && item?.stats?.hasUsefulGroove);
   const activeStem = selectedSeries.find((item) => item?.id === activeStemId && item?.selected && item?.stats?.hasUsefulGroove) || selectedUseful[0] || null;
@@ -1796,6 +1859,43 @@ function GrooveComparison({ stemUrls }) {
             Vista comparativa unica: selecciona uno o varios stems para superponer eventos de groove y sus desviaciones. Las etiquetas de confianza evitan vender ruido como analisis real.
           </div>
 
+          <div style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.14)", borderRadius: 8, padding: "10px 12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 11, color: "rgba(255,255,255,0.68)" }}>
+              <span>Rango temporal / zoom</span>
+              <span style={{ fontFamily: "'Space Mono', monospace", color: "rgba(255,255,255,0.92)" }}>
+                {rangeStartPct}% - {rangeEndPct}%
+              </span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <input
+                type="range"
+                min={0}
+                max={95}
+                step={1}
+                value={rangeStartPct}
+                onChange={(event) => {
+                  const nextStart = parseInt(event.target.value, 10);
+                  setRangeStartPct(nextStart);
+                  setRangeEndPct((prev) => Math.max(prev, Math.min(100, nextStart + 5)));
+                }}
+                style={{ width: "100%", accentColor: "#5aa3e8", cursor: "pointer" }}
+              />
+              <input
+                type="range"
+                min={5}
+                max={100}
+                step={1}
+                value={rangeEndPct}
+                onChange={(event) => {
+                  const nextEnd = parseInt(event.target.value, 10);
+                  setRangeEndPct(nextEnd);
+                  setRangeStartPct((prev) => Math.min(prev, Math.max(0, nextEnd - 5)));
+                }}
+                style={{ width: "100%", accentColor: "#5aa3e8", cursor: "pointer" }}
+              />
+            </div>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
             {[
               { label: "BPM", value: bpm, min: 60, max: 200, step: 1, set: setBpm, fmt: (value) => value },
@@ -1814,11 +1914,11 @@ function GrooveComparison({ stemUrls }) {
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {selectedSeries.map((stem) => (
-              <label key={stem.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 999, border: `1px solid ${stem.id === activeStemId ? stem.color : `${stem.color}55`}`, background: stem.id === activeStemId ? `${stem.color}22` : `${stem.color}14`, color: "rgba(255,255,255,0.82)", fontSize: 11 }}>
+              <label key={stem.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 999, border: `1px solid ${stem.id === activeStemId ? stem.color : `${stem.color}66`}`, background: stem.id === activeStemId ? `${stem.color}26` : `${stem.color}16`, color: "rgba(255,255,255,0.9)", fontSize: 11 }}>
                 <input type="checkbox" checked={!!selectedStems[stem.id]} onChange={() => setSelectedStems((prev) => ({ ...prev, [stem.id]: !prev[stem.id] }))} />
                 <input type="radio" name="active-groove-stem" checked={stem.id === activeStemId} onChange={() => setActiveStemId(stem.id)} disabled={!stem.selected || !stem.stats?.hasUsefulGroove} />
                 <span style={{ color: stem.color, fontFamily: "'Space Mono', monospace" }}>{stem.label}</span>
-                <span style={{ color: stem.confidence === "alta" ? "#78d870" : stem.confidence === "media" ? "#e8c547" : "rgba(255,255,255,0.45)" }}>
+                <span style={{ color: stem.confidence === "alta" ? "#009e73" : stem.confidence === "media" ? "#e69f00" : "rgba(255,255,255,0.62)" }}>
                   {stem.confidence}
                 </span>
               </label>
@@ -1829,20 +1929,120 @@ function GrooveComparison({ stemUrls }) {
             {selectedSeries.filter((stem) => stem.selected).map((stem) => (
               <div key={`stats-${stem.id}`} style={{ background: "rgba(255,255,255,0.03)", border: `0.5px solid ${stem.color}44`, borderRadius: 8, padding: "8px 10px" }}>
                 <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: stem.color, marginBottom: 6 }}>{stem.label}</div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.62)" }}>onsets {stem.stats?.onsets?.length ?? 0} · mapped {stem.stats?.mappedCount ?? 0}</div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.62)" }}>bpm {stem.stats?.activeBpm ? Math.round(stem.stats.activeBpm) : "?"} · var {stem.stats?.deviationStd?.toFixed(1) ?? "0.0"} ms</div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.75)" }}>onsets {stem.stats?.onsets?.length ?? 0} · mapped {stem.stats?.mappedCount ?? 0}</div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.75)" }}>bpm {stem.stats?.activeBpm ? Math.round(stem.stats.activeBpm) : "?"} · var {stem.stats?.deviationStd?.toFixed(1) ?? "0.0"} ms</div>
               </div>
             ))}
           </div>
 
           <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: 1, marginBottom: 8 }}>ONSETS SUPERPUESTOS</div>
-            <canvas ref={comparisonCanvasRef} style={{ width: "100%", height: 180, display: "block" }} />
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.72)", letterSpacing: 1, marginBottom: 8 }}>ONSETS SUPERPUESTOS</div>
+            <div style={{ position: "relative" }}>
+              <canvas
+                ref={comparisonCanvasRef}
+                style={{ width: "100%", height: 180, display: "block" }}
+                onMouseMove={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const x = event.clientX - rect.left;
+                  const y = event.clientY - rect.top;
+                  const hit = onsetPointsRef.current.find((point) => Math.abs(point.x - x) <= 5 && y >= point.yTop - 4 && y <= point.yBottom + 4);
+                  if (!hit) {
+                    setOnsetTooltip(null);
+                    return;
+                  }
+                  const stemInfo = selectedSeries.find((series) => series.id === hit.stemId);
+                  const activeBpm = stemInfo?.stats?.activeBpm || bpm;
+                  const stepDuration = 60 / Math.max(1, activeBpm) / (subdivision / 4);
+                  const stepNumber = Math.max(1, Math.round(hit.onset / stepDuration) + 1);
+                  const barNumber = Math.floor((stepNumber - 1) / subdivision) + 1;
+                  setOnsetTooltip({
+                    x: x + 12,
+                    y: y + 12,
+                    stemLabel: hit.stemLabel,
+                    ms: formatMsFromSeconds(hit.onset),
+                    step: stepNumber,
+                    bar: barNumber,
+                    color: hit.color,
+                  });
+                }}
+                onMouseLeave={() => setOnsetTooltip(null)}
+              />
+              {onsetTooltip && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: onsetTooltip.x,
+                    top: onsetTooltip.y,
+                    pointerEvents: "none",
+                    zIndex: 10,
+                    background: "rgba(8,9,11,0.95)",
+                    border: `1px solid ${onsetTooltip.color}99`,
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    minWidth: 170,
+                    boxShadow: "0 4px 20px rgba(0,0,0,0.35)",
+                  }}
+                >
+                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: onsetTooltip.color, marginBottom: 4 }}>{onsetTooltip.stemLabel}</div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.9)" }}>t = {onsetTooltip.ms} ms</div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.78)" }}>paso {onsetTooltip.step} · compás {onsetTooltip.bar}</div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: 1, marginBottom: 8 }}>DESVIACIONES DE GROOVE</div>
-            <canvas ref={deviationCanvasRef} style={{ width: "100%", height: 220, display: "block" }} />
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.72)", letterSpacing: 1, marginBottom: 8 }}>DESVIACIONES DE GROOVE</div>
+            <div style={{ position: "relative" }}>
+              <canvas
+                ref={deviationCanvasRef}
+                style={{ width: "100%", height: 220, display: "block" }}
+                onMouseMove={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const x = event.clientX - rect.left;
+                  const y = event.clientY - rect.top;
+                  const hit = deviationPointsRef.current
+                    .filter((point) => Math.abs(point.x - x) <= 6)
+                    .sort((a, b) => Math.abs(a.y - y) - Math.abs(b.y - y))[0];
+                  if (!hit || Math.abs(hit.y - y) > 12) {
+                    setDeviationTooltip(null);
+                    return;
+                  }
+                  const barNumber = Math.floor((hit.step - 1) / subdivision) + 1;
+                  setDeviationTooltip({
+                    x: x + 12,
+                    y: y + 12,
+                    stemLabel: hit.stemLabel,
+                    value: hit.value,
+                    step: hit.step,
+                    bar: barNumber,
+                    color: hit.color,
+                  });
+                }}
+                onMouseLeave={() => setDeviationTooltip(null)}
+              />
+              {deviationTooltip && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: deviationTooltip.x,
+                    top: deviationTooltip.y,
+                    pointerEvents: "none",
+                    zIndex: 10,
+                    background: "rgba(8,9,11,0.95)",
+                    border: `1px solid ${deviationTooltip.color}99`,
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    minWidth: 190,
+                    boxShadow: "0 4px 20px rgba(0,0,0,0.35)",
+                  }}
+                >
+                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: deviationTooltip.color, marginBottom: 4 }}>{deviationTooltip.stemLabel}</div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.9)" }}>desviación = {deviationTooltip.value.toFixed(2)} ms</div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.78)" }}>paso {deviationTooltip.step} · compás {deviationTooltip.bar}</div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
