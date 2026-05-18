@@ -932,7 +932,7 @@ function StemCard({
             style={{
               flex: 1,
               accentColor: stem.color,
-              height: 3,
+              height: "clamp(8px, 0.9vw, 12px)",
               cursor: "pointer",
             }}
           />
@@ -1413,7 +1413,7 @@ function GrooveExtractor({ stemUrl, stemLabel = "STEM" }) {
                       style={{
                         width: "100%",
                         accentColor: GE_ACCENT,
-                        height: 3,
+                        height: "clamp(8px, 0.9vw, 12px)",
                         cursor: "pointer",
                       }}
                     />
@@ -1805,7 +1805,7 @@ function GrooveComparison({ stemUrls }) {
                   <span>{label}</span>
                   <span style={{ color: "#fff", fontFamily: "'Space Mono', monospace" }}>{fmt(value)}</span>
                 </div>
-                <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => set(label === "Threshold" ? parseFloat(event.target.value) : parseInt(event.target.value, 10))} style={{ width: "100%", accentColor: "#5aa3e8", height: 3, cursor: "pointer" }} />
+                <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => set(label === "Threshold" ? parseFloat(event.target.value) : parseInt(event.target.value, 10))} style={{ width: "100%", accentColor: "#5aa3e8", height: "clamp(8px, 0.9vw, 12px)", cursor: "pointer" }} />
               </div>
             ))}
           </div>
@@ -1970,7 +1970,7 @@ function PatternRow({
             max={100}
             value={level}
             onChange={(event) => onLevelChange?.(Number(event.target.value))}
-            style={{ flex: 1, accentColor: color, height: 3, cursor: "pointer" }}
+            style={{ flex: 1, accentColor: color, height: "clamp(8px, 0.9vw, 12px)", cursor: "pointer" }}
           />
         </div>
       </div>
@@ -2959,18 +2959,55 @@ export default function Page() {
         input[type=range] {
           -webkit-appearance: none;
           appearance: none;
-          background: rgba(255,255,255,0.1);
-          border-radius: 4px;
-          height: 3px;
+          background: transparent;
+          border-radius: 999px;
+          height: clamp(8px, 0.9vw, 12px);
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+          background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,255,255,0.1));
+          border-radius: 999px;
+          height: clamp(8px, 0.9vw, 12px);
+          box-shadow: inset 0 1px 2px rgba(0,0,0,0.5), inset 0 -1px 1px rgba(255,255,255,0.07);
+        }
+
+        input[type=range]::-moz-range-track {
+          background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,255,255,0.1));
+          border-radius: 999px;
+          height: clamp(8px, 0.9vw, 12px);
+          box-shadow: inset 0 1px 2px rgba(0,0,0,0.5), inset 0 -1px 1px rgba(255,255,255,0.07);
         }
 
         input[type=range]::-webkit-slider-thumb {
           -webkit-appearance: none;
-          width: 12px;
-          height: 12px;
+          width: clamp(18px, 1.3vw, 24px);
+          height: clamp(18px, 1.3vw, 24px);
           border-radius: 50%;
           cursor: pointer;
           border: none;
+          margin-top: calc((clamp(8px, 0.9vw, 12px) - clamp(18px, 1.3vw, 24px)) / 2);
+          background: radial-gradient(circle at 35% 30%, #f1f4f8, #bcc4cf 58%, #929ca9 100%);
+          box-shadow: 0 0 0 2px rgba(8,9,11,0.7), 0 2px 5px rgba(0,0,0,0.45);
+          transition: transform 140ms ease, box-shadow 140ms ease;
+        }
+
+        input[type=range]::-moz-range-thumb {
+          width: clamp(18px, 1.3vw, 24px);
+          height: clamp(18px, 1.3vw, 24px);
+          border-radius: 50%;
+          cursor: pointer;
+          border: none;
+          background: radial-gradient(circle at 35% 30%, #f1f4f8, #bcc4cf 58%, #929ca9 100%);
+          box-shadow: 0 0 0 2px rgba(8,9,11,0.7), 0 2px 5px rgba(0,0,0,0.45);
+          transition: transform 140ms ease, box-shadow 140ms ease;
+        }
+
+        input[type=range]:hover::-webkit-slider-thumb,
+        input[type=range]:focus-visible::-webkit-slider-thumb,
+        input[type=range]:hover::-moz-range-thumb,
+        input[type=range]:focus-visible::-moz-range-thumb {
+          transform: scale(1.04);
+          box-shadow: 0 0 0 2px rgba(8,9,11,0.7), 0 0 0 5px rgba(232,197,71,0.22), 0 4px 8px rgba(0,0,0,0.5);
         }
 
         .stems-grid {
