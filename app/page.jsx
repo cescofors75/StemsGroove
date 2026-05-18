@@ -2832,78 +2832,16 @@ export default function Page() {
   }, []);
 
   const ensureSequencerBus = useCallback((audioContext) => {
-    const character = getSequencerCharacterProfile(sequencerCharacter);
-
     if (sequencerMasterBusRef.current?.context === audioContext) {
-      const existing = sequencerMasterBusRef.current;
-      existing.compressor.threshold.value = character.compThreshold;
-      existing.compressor.ratio.value = character.compRatio;
-      existing.compressor.attack.value = character.compAttack;
-      existing.compressor.release.value = character.compRelease;
-      existing.masterGain.gain.value = character.masterGain;
-
-      for (const voiceId of ["original", "drums", "bass", "vocals", "other"]) {
-        const chain = existing.voiceChains?.[voiceId];
-        if (!chain) {
-          continue;
-        }
-        const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
-        chain.hp.frequency.value = tone.hp;
-        chain.lp.frequency.value = tone.lp;
-        chain.saturator.curve = getSoftClipCurveCached(tone.drive);
-        chain.saturator.oversample = "none";
-      }
-
       return sequencerMasterBusRef.current;
     }
-
     const input = audioContext.createGain();
-    const compressor = audioContext.createDynamicsCompressor();
-    compressor.threshold.value = character.compThreshold;
-    compressor.knee.value = 18;
-    compressor.ratio.value = character.compRatio;
-    compressor.attack.value = character.compAttack;
-    compressor.release.value = character.compRelease;
-
-    const masterGain = audioContext.createGain();
-    masterGain.gain.value = character.masterGain;
-
-    input.connect(compressor);
-    compressor.connect(masterGain);
-    masterGain.connect(audioContext.destination);
-
-    const voiceChains = {};
-    for (const voiceId of ["original", "drums", "bass", "vocals", "other"]) {
-      const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
-      const voiceInput = audioContext.createGain();
-      voiceInput.gain.value = 1;
-
-      const hp = audioContext.createBiquadFilter();
-      hp.type = "highpass";
-      hp.frequency.value = tone.hp;
-      hp.Q.value = 0.75;
-
-      const lp = audioContext.createBiquadFilter();
-      lp.type = "lowpass";
-      lp.frequency.value = tone.lp;
-      lp.Q.value = 0.7;
-
-      const saturator = audioContext.createWaveShaper();
-      saturator.curve = getSoftClipCurveCached(tone.drive);
-      saturator.oversample = "none";
-
-      voiceInput.connect(hp);
-      hp.connect(lp);
-      lp.connect(saturator);
-      saturator.connect(input);
-
-      voiceChains[voiceId] = { input: voiceInput, hp, lp, saturator };
-    }
-
-    const bus = { context: audioContext, input, compressor, masterGain, voiceChains };
+    input.gain.value = 0.9;
+    input.connect(audioContext.destination);
+    const bus = { context: audioContext, input };
     sequencerMasterBusRef.current = bus;
     return bus;
-  }, [sequencerCharacter]);
+  }, []);
 
   const triggerSequencerSlice = useCallback((audioContext, voiceId, step, time, intensity = 1) => {
     const sourceInfo = sequencerSourcesRef.current[voiceId];
@@ -2913,53 +2851,43 @@ export default function Page() {
 
     const offset = step * sourceInfo.stepDuration;
     const maxDuration = Math.max(0, sourceInfo.buffer.duration - offset);
-    const intensityScale = Math.max(0.08, Math.min(1, intensity));
-    const durationShape =
-      voiceId === "drums" ? 0.62 :
-      voiceId === "bass" ? 0.92 :
-      voiceId === "vocals" ? 1.35 :
-      voiceId === "other" ? 1.15 :
-      0.88;
-    const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
-    const gateDuration = Math.min(sourceInfo.stepDuration * durationShape * (0.55 + intensityScale * 0.7), maxDuration);
-    const tailDuration = Math.min(tone.release, Math.max(0, maxDuration - gateDuration));
-    const totalDuration = Math.min(gateDuration + tailDuration, sourceInfo.stepDuration * 0.92, maxDuration);
-    if (totalDuration < 0.02) {
+    const duration = Math.min(sourceInfo.stepDuration * 0.9, maxDuration);
+    if (duration < 0.02) {
       return;
     }
 
-    const bus = ensureSequencerBus(audioContext);
-    const character = getSequencerCharacterProfile(sequencerCharacter);
+    // Stop previous slice on this voice to prevent stacking.
     const previous = sequencerActiveVoicesRef.current[voiceId];
     if (previous) {
       try {
-        previous.gain?.gain?.cancelScheduledValues(time);
-        previous.gain?.gain?.setTargetAtTime(0.0001, time, 0.006);
-        previous.source?.stop(time + 0.035);
+        previous.gain.gain.cancelScheduledValues(time);
+        previous.gain.gain.setTargetAtTime(0.0001, time, 0.005);
+        previous.source.stop(time + 0.03);
       } catch {
-        // The source may already have ended.
+        // Already ended — fine.
       }
     }
+
+    const baseGain =
+      voiceId === "drums" ? 0.85 :
+      voiceId === "bass" ? 0.75 :
+      voiceId === "vocals" ? 0.6 :
+      voiceId === "other" ? 0.65 :
+      0.55;
+    const levelScale = Math.max(0, Math.min(1, (sequencerLevelsRef.current[voiceId] ?? 85) / 100));
+    const vol = baseGain * levelScale * Math.max(0.1, Math.min(1, intensity));
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
     source.playbackRate.value = 1;
 
     const gain = audioContext.createGain();
-    const baseGain =
-      voiceId === "drums" ? 0.82 :
-      voiceId === "bass" ? 0.66 :
-      voiceId === "vocals" ? 0.48 :
-      voiceId === "other" ? 0.54 :
-      0.42;
-    const levelScale = Math.max(0, Math.min(1, (sequencerLevelsRef.current[voiceId] ?? 85) / 100));
-    const targetGain = Math.max(0.0001, baseGain * character.gainMul * levelScale * (0.48 + intensityScale * 0.82));
-
-    const attackTime = Math.max(0.004, tone.attack);
     gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(targetGain, time + attackTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + totalDuration);
+    gain.gain.linearRampToValueAtTime(vol, time + 0.003);
+    gain.gain.setValueAtTime(vol, time + Math.max(0.003, duration - 0.02));
+    gain.gain.linearRampToValueAtTime(0.0001, time + duration);
 
+    const bus = ensureSequencerBus(audioContext);
     source.connect(gain);
     gain.connect(bus.input);
 
@@ -2971,8 +2899,8 @@ export default function Page() {
     };
 
     source.start(time, offset);
-    source.stop(time + totalDuration);
-  }, [ensureSequencerBus, sequencerCharacter]);
+    source.stop(time + duration);
+  }, [ensureSequencerBus]);
 
   const toggleSequencer = useCallback(async () => {
     if (sequencerPlaying) {
