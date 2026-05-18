@@ -900,11 +900,12 @@ function getSequencerCharacterProfile(character = "punch") {
 
 function getSequencerVoiceTone(voiceId, character = "punch") {
   const profile = getSequencerCharacterProfile(character);
-  if (voiceId === "drums") return { hp: 38, lp: character === "warm" ? 8600 : 9800, drive: 1.35 * profile.driveMul, pan: 0.08, attack: 0.003, release: 0.08, rateJitter: 0.012 * profile.jitterMul };
-  if (voiceId === "bass") return { hp: 28, lp: character === "clean" ? 2800 : 2300, drive: 1.22 * profile.driveMul, pan: 0.02, attack: 0.006, release: 0.16, rateJitter: 0.004 * profile.jitterMul };
-  if (voiceId === "vocals") return { hp: 120, lp: character === "warm" ? 6900 : 7600, drive: 1.12 * profile.driveMul, pan: 0.12, attack: 0.008, release: 0.14, rateJitter: 0.008 * profile.jitterMul };
-  if (voiceId === "other") return { hp: 90, lp: character === "clean" ? 9400 : 8600, drive: 1.18 * profile.driveMul, pan: 0.16, attack: 0.006, release: 0.12, rateJitter: 0.01 * profile.jitterMul };
-  return { hp: 35, lp: 12000, drive: 1.08 * profile.driveMul, pan: 0.04, attack: 0.006, release: 0.12, rateJitter: 0.006 * profile.jitterMul };
+  const jitterBase = character === "warm" ? 0.0012 : character === "punch" ? 0.0007 : 0;
+  if (voiceId === "drums") return { hp: 34, lp: character === "warm" ? 8400 : 9300, drive: 1.35 * profile.driveMul, pan: 0.08, attack: 0.003, release: 0.08, rateJitter: jitterBase * profile.jitterMul };
+  if (voiceId === "bass") return { hp: 24, lp: character === "clean" ? 3000 : 2500, drive: 1.22 * profile.driveMul, pan: 0.02, attack: 0.006, release: 0.16, rateJitter: (jitterBase * 0.5) * profile.jitterMul };
+  if (voiceId === "vocals") return { hp: 95, lp: character === "warm" ? 6700 : 7300, drive: 1.12 * profile.driveMul, pan: 0.12, attack: 0.008, release: 0.14, rateJitter: (jitterBase * 0.45) * profile.jitterMul };
+  if (voiceId === "other") return { hp: 72, lp: character === "clean" ? 8800 : 8200, drive: 1.18 * profile.driveMul, pan: 0.16, attack: 0.006, release: 0.12, rateJitter: (jitterBase * 0.6) * profile.jitterMul };
+  return { hp: 30, lp: 11500, drive: 1.08 * profile.driveMul, pan: 0.04, attack: 0.006, release: 0.12, rateJitter: (jitterBase * 0.35) * profile.jitterMul };
 }
 
 function AnimatedWaveform({ color, active, small = false }) {
@@ -2922,7 +2923,8 @@ export default function Page() {
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
-    source.playbackRate.value = 1 + (Math.random() * 2 - 1) * tone.rateJitter;
+    const randomJitter = (Math.random() * 2 - 1) * tone.rateJitter;
+    source.playbackRate.value = clamp(1 + randomJitter, 0.9985, 1.0015);
 
     const gain = audioContext.createGain();
     const baseGain =
