@@ -2865,6 +2865,7 @@ export default function Page() {
       voiceId === "vocals" ? 1.35 :
       voiceId === "other" ? 1.15 :
       0.88;
+    const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
     const gateDuration = Math.min(sourceInfo.stepDuration * durationShape * (0.55 + intensityScale * 0.7), maxDuration);
     const tailDuration = Math.min(tone.release, Math.max(0, maxDuration - gateDuration));
     const totalDuration = gateDuration + tailDuration;
@@ -2876,7 +2877,6 @@ export default function Page() {
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
-    const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
     source.playbackRate.value = 1 + (Math.random() * 2 - 1) * tone.rateJitter;
 
     const gain = audioContext.createGain();
