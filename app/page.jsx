@@ -2863,8 +2863,9 @@ export default function Page() {
     if (previous) {
       try {
         previous.gain.gain.cancelScheduledValues(time);
-        previous.gain.gain.setTargetAtTime(0.0001, time, 0.005);
-        previous.source.stop(time + 0.03);
+        previous.gain.gain.setValueAtTime(previous.gain.gain.value, time);
+        previous.gain.gain.linearRampToValueAtTime(0, time + 0.012);
+        previous.source.stop(time + 0.05);
       } catch {
         // Already ended — fine.
       }
@@ -2878,11 +2879,12 @@ export default function Page() {
     source.playbackRate.value = 1;
 
     const gain = audioContext.createGain();
-    const fadeOut = Math.min(0.008, duration * 0.1);
-    gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.linearRampToValueAtTime(vol, time + 0.001);
-    gain.gain.setValueAtTime(vol, time + Math.max(0.001, duration - fadeOut));
-    gain.gain.linearRampToValueAtTime(0.0001, time + duration);
+    const attack = 0.005;
+    const release = Math.min(0.02, duration * 0.25);
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(vol, time + attack);
+    gain.gain.setValueAtTime(vol, time + Math.max(attack, duration - release));
+    gain.gain.linearRampToValueAtTime(0, time + duration);
 
     const bus = ensureSequencerBus(audioContext);
     source.connect(gain);
