@@ -2512,9 +2512,11 @@ export default function Page() {
 
   const playSource = async (sourceId, sourceUrl, volume = 1) => {
     const player = audioRef.current;
-    if (!player || !sourceUrl) {
+    if (!player || !sourceUrl || typeof sourceUrl !== "string" || !sourceUrl.trim()) {
       return;
     }
+
+    const normalizedUrl = sourceUrl.trim();
 
     if (sequencerPlaying) {
       stopSequencer();
@@ -2528,6 +2530,11 @@ export default function Page() {
       }
 
       try {
+        if (!player.getAttribute("src") || !player.currentSrc) {
+          player.src = normalizedUrl;
+          player.load();
+          currentAudioSourceRef.current = { id: sourceId, url: normalizedUrl };
+        }
         player.volume = volume;
         player.muted = false;
         await player.play();
@@ -2540,11 +2547,15 @@ export default function Page() {
     }
 
     player.pause();
-    const sourceChanged = currentAudioSourceRef.current.url !== sourceUrl;
+    const sourceChanged = currentAudioSourceRef.current.url !== normalizedUrl;
     if (sourceChanged) {
-      player.src = sourceUrl;
+      player.src = normalizedUrl;
       player.load();
-      currentAudioSourceRef.current = { id: sourceId, url: sourceUrl };
+      currentAudioSourceRef.current = { id: sourceId, url: normalizedUrl };
+    } else if (!player.getAttribute("src") || !player.currentSrc) {
+      player.src = normalizedUrl;
+      player.load();
+      currentAudioSourceRef.current = { id: sourceId, url: normalizedUrl };
     }
     player.currentTime = 0;
     player.volume = volume;
