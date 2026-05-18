@@ -1715,6 +1715,12 @@ function drawGrooveDeviationComparison(seriesList, canvas, activeStemId, viewSta
 }
 
 function GrooveComparison({ stemUrls }) {
+  const GC_TEXT_PRIMARY = "rgba(255,255,255,0.92)";
+  const GC_TEXT_SECONDARY = "rgba(255,255,255,0.78)";
+  const GC_TEXT_MUTED = "rgba(255,255,255,0.68)";
+  const GC_TEXT_SOFT = "rgba(255,255,255,0.62)";
+  const GC_TEXT_DISABLED = "rgba(255,255,255,0.38)";
+
   const [collapsed, setCollapsed] = useState(false);
   const [bpm, setBpm] = useState(120);
   const [subdivision, setSubdivision] = useState(16);
@@ -1850,49 +1856,120 @@ function GrooveComparison({ stemUrls }) {
         onClick={() => setCollapsed((value) => !value)}
         style={{ width: "100%", background: "transparent", border: "none", borderBottom: collapsed ? "none" : "1px solid rgba(255,255,255,0.07)", cursor: "pointer", padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", color: "inherit" }}
       >
-        <span style={{ fontFamily: "'Space Mono', monospace", letterSpacing: 2, fontSize: 10, color: "rgba(255,255,255,0.72)" }}>GROOVE COMPARISON</span>
-        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.4)" }}>{collapsed ? "▼" : "▲"}</span>
+        <span style={{ fontFamily: "'Space Mono', monospace", letterSpacing: 2, fontSize: 10, color: GC_TEXT_SECONDARY }}>GROOVE COMPARISON</span>
+        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_DISABLED }}>{collapsed ? "▼" : "▲"}</span>
       </button>
       {!collapsed && (
         <div style={{ padding: "16px 18px", display: "grid", gap: 14 }}>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.68)", lineHeight: 1.5, background: "rgba(90,163,232,0.07)", border: "1px solid rgba(90,163,232,0.22)", borderRadius: 8, padding: "10px 12px" }}>
+          <div style={{ fontSize: 11, color: GC_TEXT_MUTED, lineHeight: 1.5, background: "rgba(90,163,232,0.07)", border: "1px solid rgba(90,163,232,0.22)", borderRadius: 8, padding: "10px 12px" }}>
             Vista comparativa unica: selecciona uno o varios stems para superponer eventos de groove y sus desviaciones. Las etiquetas de confianza evitan vender ruido como analisis real.
           </div>
 
           <div style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.14)", borderRadius: 8, padding: "10px 12px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 11, color: "rgba(255,255,255,0.68)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 11, color: GC_TEXT_MUTED }}>
               <span>Rango temporal / zoom</span>
-              <span style={{ fontFamily: "'Space Mono', monospace", color: "rgba(255,255,255,0.92)" }}>
+              <span style={{ fontFamily: "'Space Mono', monospace", color: GC_TEXT_PRIMARY }}>
                 {rangeStartPct}% - {rangeEndPct}%
               </span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <input
-                type="range"
-                min={0}
-                max={95}
-                step={1}
-                value={rangeStartPct}
-                onChange={(event) => {
-                  const nextStart = parseInt(event.target.value, 10);
-                  setRangeStartPct(nextStart);
-                  setRangeEndPct((prev) => Math.max(prev, Math.min(100, nextStart + 5)));
+            <div style={{ fontSize: 10, color: GC_TEXT_SOFT, marginBottom: 8 }}>
+              Ajusta el tramo visible de ambos gráficos (ONSETS y DESVIACIONES).
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 54px", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: GC_TEXT_SOFT, fontFamily: "'Space Mono', monospace" }}>INICIO</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={95}
+                  step={1}
+                  value={rangeStartPct}
+                  onChange={(event) => {
+                    const nextStart = parseInt(event.target.value, 10);
+                    setRangeStartPct(nextStart);
+                    setRangeEndPct((prev) => Math.max(prev, Math.min(100, nextStart + 5)));
+                  }}
+                  style={{ width: "100%", accentColor: "#5aa3e8", cursor: "pointer" }}
+                />
+                <span style={{ fontSize: 10, color: GC_TEXT_SECONDARY, fontFamily: "'Space Mono', monospace", textAlign: "right" }}>{rangeStartPct}%</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 54px", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: GC_TEXT_SOFT, fontFamily: "'Space Mono', monospace" }}>FIN</span>
+                <input
+                  type="range"
+                  min={5}
+                  max={100}
+                  step={1}
+                  value={rangeEndPct}
+                  onChange={(event) => {
+                    const nextEnd = parseInt(event.target.value, 10);
+                    setRangeEndPct(nextEnd);
+                    setRangeStartPct((prev) => Math.min(prev, Math.max(0, nextEnd - 5)));
+                  }}
+                  style={{ width: "100%", accentColor: "#5aa3e8", cursor: "pointer" }}
+                />
+                <span style={{ fontSize: 10, color: GC_TEXT_SECONDARY, fontFamily: "'Space Mono', monospace", textAlign: "right" }}>{rangeEndPct}%</span>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              {[25, 50, 100].map((size) => (
+                <button
+                  key={`zoom-${size}`}
+                  type="button"
+                  onClick={() => {
+                    if (size === 100) {
+                      setRangeStartPct(0);
+                      setRangeEndPct(100);
+                      return;
+                    }
+                    const currentCenter = (rangeStartPct + rangeEndPct) / 2;
+                    const half = size / 2;
+                    let nextStart = Math.max(0, Math.round(currentCenter - half));
+                    let nextEnd = Math.min(100, Math.round(currentCenter + half));
+                    if (nextEnd - nextStart < 5) {
+                      nextEnd = Math.min(100, nextStart + 5);
+                    }
+                    if (nextEnd === 100 && nextEnd - nextStart < size) {
+                      nextStart = Math.max(0, 100 - size);
+                    }
+                    setRangeStartPct(nextStart);
+                    setRangeEndPct(nextEnd);
+                  }}
+                  style={{
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    background: "rgba(255,255,255,0.03)",
+                    color: GC_TEXT_SECONDARY,
+                    borderRadius: 999,
+                    padding: "4px 10px",
+                    fontSize: 10,
+                    fontFamily: "'Space Mono', monospace",
+                    letterSpacing: 0.6,
+                    cursor: "pointer",
+                  }}
+                >
+                  ZOOM {size}%
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setRangeStartPct(0);
+                  setRangeEndPct(100);
                 }}
-                style={{ width: "100%", accentColor: "#5aa3e8", cursor: "pointer" }}
-              />
-              <input
-                type="range"
-                min={5}
-                max={100}
-                step={1}
-                value={rangeEndPct}
-                onChange={(event) => {
-                  const nextEnd = parseInt(event.target.value, 10);
-                  setRangeEndPct(nextEnd);
-                  setRangeStartPct((prev) => Math.min(prev, Math.max(0, nextEnd - 5)));
+                style={{
+                  border: "1px solid rgba(90,163,232,0.45)",
+                  background: "rgba(90,163,232,0.12)",
+                  color: "#8ec6f2",
+                  borderRadius: 999,
+                  padding: "4px 10px",
+                  fontSize: 10,
+                  fontFamily: "'Space Mono', monospace",
+                  letterSpacing: 0.6,
+                  cursor: "pointer",
                 }}
-                style={{ width: "100%", accentColor: "#5aa3e8", cursor: "pointer" }}
-              />
+              >
+                RESET
+              </button>
             </div>
           </div>
 
@@ -1903,9 +1980,9 @@ function GrooveComparison({ stemUrls }) {
               { label: "Threshold", value: threshold, min: 0.02, max: 0.5, step: 0.01, set: setThreshold, fmt: (value) => value.toFixed(2) },
             ].map(({ label, value, min, max, step, set, fmt }) => (
               <div key={label} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "10px 12px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "rgba(255,255,255,0.45)", marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: GC_TEXT_SOFT, marginBottom: 8 }}>
                   <span>{label}</span>
-                  <span style={{ color: "#fff", fontFamily: "'Space Mono', monospace" }}>{fmt(value)}</span>
+                  <span style={{ color: GC_TEXT_PRIMARY, fontFamily: "'Space Mono', monospace" }}>{fmt(value)}</span>
                 </div>
                 <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => set(label === "Threshold" ? parseFloat(event.target.value) : parseInt(event.target.value, 10))} style={{ width: "100%", accentColor: "#5aa3e8", height: "clamp(8px, 0.9vw, 12px)", cursor: "pointer" }} />
               </div>
@@ -1914,11 +1991,11 @@ function GrooveComparison({ stemUrls }) {
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {selectedSeries.map((stem) => (
-              <label key={stem.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 999, border: `1px solid ${stem.id === activeStemId ? stem.color : `${stem.color}66`}`, background: stem.id === activeStemId ? `${stem.color}26` : `${stem.color}16`, color: "rgba(255,255,255,0.9)", fontSize: 11 }}>
+              <label key={stem.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 999, border: `1px solid ${stem.id === activeStemId ? stem.color : `${stem.color}66`}`, background: stem.id === activeStemId ? `${stem.color}26` : `${stem.color}16`, color: GC_TEXT_PRIMARY, fontSize: 11 }}>
                 <input type="checkbox" checked={!!selectedStems[stem.id]} onChange={() => setSelectedStems((prev) => ({ ...prev, [stem.id]: !prev[stem.id] }))} />
                 <input type="radio" name="active-groove-stem" checked={stem.id === activeStemId} onChange={() => setActiveStemId(stem.id)} disabled={!stem.selected || !stem.stats?.hasUsefulGroove} />
                 <span style={{ color: stem.color, fontFamily: "'Space Mono', monospace" }}>{stem.label}</span>
-                <span style={{ color: stem.confidence === "alta" ? "#009e73" : stem.confidence === "media" ? "#e69f00" : "rgba(255,255,255,0.62)" }}>
+                <span style={{ color: stem.confidence === "alta" ? "#009e73" : stem.confidence === "media" ? "#e69f00" : GC_TEXT_SOFT }}>
                   {stem.confidence}
                 </span>
               </label>
@@ -1929,14 +2006,14 @@ function GrooveComparison({ stemUrls }) {
             {selectedSeries.filter((stem) => stem.selected).map((stem) => (
               <div key={`stats-${stem.id}`} style={{ background: "rgba(255,255,255,0.03)", border: `0.5px solid ${stem.color}44`, borderRadius: 8, padding: "8px 10px" }}>
                 <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: stem.color, marginBottom: 6 }}>{stem.label}</div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.75)" }}>onsets {stem.stats?.onsets?.length ?? 0} · mapped {stem.stats?.mappedCount ?? 0}</div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.75)" }}>bpm {stem.stats?.activeBpm ? Math.round(stem.stats.activeBpm) : "?"} · var {stem.stats?.deviationStd?.toFixed(1) ?? "0.0"} ms</div>
+                <div style={{ fontSize: 10, color: GC_TEXT_SECONDARY }}>onsets {stem.stats?.onsets?.length ?? 0} · mapped {stem.stats?.mappedCount ?? 0}</div>
+                <div style={{ fontSize: 10, color: GC_TEXT_SECONDARY }}>bpm {stem.stats?.activeBpm ? Math.round(stem.stats.activeBpm) : "?"} · var {stem.stats?.deviationStd?.toFixed(1) ?? "0.0"} ms</div>
               </div>
             ))}
           </div>
 
           <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.72)", letterSpacing: 1, marginBottom: 8 }}>ONSETS SUPERPUESTOS</div>
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1, marginBottom: 8 }}>ONSETS SUPERPUESTOS</div>
             <div style={{ position: "relative" }}>
               <canvas
                 ref={comparisonCanvasRef}
@@ -1984,15 +2061,15 @@ function GrooveComparison({ stemUrls }) {
                   }}
                 >
                   <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: onsetTooltip.color, marginBottom: 4 }}>{onsetTooltip.stemLabel}</div>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.9)" }}>t = {onsetTooltip.ms} ms</div>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.78)" }}>paso {onsetTooltip.step} · compás {onsetTooltip.bar}</div>
+                  <div style={{ fontSize: 10, color: GC_TEXT_PRIMARY }}>t = {onsetTooltip.ms} ms</div>
+                  <div style={{ fontSize: 10, color: GC_TEXT_SECONDARY }}>paso {onsetTooltip.step} · compás {onsetTooltip.bar}</div>
                 </div>
               )}
             </div>
           </div>
 
           <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.72)", letterSpacing: 1, marginBottom: 8 }}>DESVIACIONES DE GROOVE</div>
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1, marginBottom: 8 }}>DESVIACIONES DE GROOVE</div>
             <div style={{ position: "relative" }}>
               <canvas
                 ref={deviationCanvasRef}
@@ -2038,17 +2115,17 @@ function GrooveComparison({ stemUrls }) {
                   }}
                 >
                   <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: deviationTooltip.color, marginBottom: 4 }}>{deviationTooltip.stemLabel}</div>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.9)" }}>desviación = {deviationTooltip.value.toFixed(2)} ms</div>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.78)" }}>paso {deviationTooltip.step} · compás {deviationTooltip.bar}</div>
+                  <div style={{ fontSize: 10, color: GC_TEXT_PRIMARY }}>desviación = {deviationTooltip.value.toFixed(2)} ms</div>
+                  <div style={{ fontSize: 10, color: GC_TEXT_SECONDARY }}>paso {deviationTooltip.step} · compás {deviationTooltip.bar}</div>
                 </div>
               )}
             </div>
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.62)", fontSize: 11 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", color: GC_TEXT_SOFT, fontSize: 11 }}>
               <span style={{ fontFamily: "'Space Mono', monospace" }}>EXPORT STEM</span>
-              <span style={{ color: activeStem?.color || "rgba(255,255,255,0.35)", fontFamily: "'Space Mono', monospace" }}>{activeStem?.label || "NONE"}</span>
+              <span style={{ color: activeStem?.color || GC_TEXT_DISABLED, fontFamily: "'Space Mono', monospace" }}>{activeStem?.label || "NONE"}</span>
             </div>
             <button
               type="button"
@@ -2057,7 +2134,7 @@ function GrooveComparison({ stemUrls }) {
               style={{
                 background: "rgba(255,255,255,0.04)",
                 border: "1px solid rgba(255,255,255,0.14)",
-                color: activeStem ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.32)",
+                color: activeStem ? GC_TEXT_SECONDARY : "rgba(255,255,255,0.32)",
                 borderRadius: 8,
                 padding: "7px 14px",
                 fontSize: 12,
@@ -2075,7 +2152,7 @@ function GrooveComparison({ stemUrls }) {
               style={{
                 background: "rgba(255,255,255,0.04)",
                 border: "1px solid rgba(255,255,255,0.14)",
-                color: activeStem ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.32)",
+                color: activeStem ? GC_TEXT_SECONDARY : "rgba(255,255,255,0.32)",
                 borderRadius: 8,
                 padding: "7px 14px",
                 fontSize: 12,
@@ -3179,17 +3256,56 @@ export default function Page() {
 
   return (
     <div
+      className="app-shell"
       style={{
         minHeight: "100vh",
         background:
           "radial-gradient(circle at 20% -10%, rgba(232,197,71,0.09), transparent 45%), radial-gradient(circle at 90% 90%, rgba(71,184,232,0.08), transparent 40%), #08090b",
         color: "#ffffff",
         fontFamily: "'Manrope', sans-serif",
-        padding: "36px 18px 48px",
+        padding: "clamp(22px, 3vw, 36px) clamp(14px, 2.4vw, 24px) 56px",
       }}
     >
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+        .app-shell {
+          color: rgba(255,255,255,0.98);
+        }
+
+        .page-container {
+          max-width: 1120px;
+          margin: 0 auto;
+        }
+
+        .page-container > div {
+          transition: box-shadow 220ms ease, border-color 220ms ease, transform 180ms ease;
+        }
+
+        .app-shell button {
+          transition: transform 140ms ease, border-color 200ms ease, background-color 200ms ease, box-shadow 200ms ease;
+        }
+
+        .app-shell button:hover:not(:disabled) {
+          transform: translateY(-1px);
+        }
+
+        .app-shell button:active:not(:disabled) {
+          transform: translateY(0);
+        }
+
+        .app-shell button:focus-visible,
+        .app-shell input:focus-visible {
+          outline: 2px solid rgba(147,197,253,0.9);
+          outline-offset: 2px;
+        }
+
+        .app-shell code {
+          background: rgba(255,255,255,0.08);
+          border: 1px solid rgba(255,255,255,0.14);
+          border-radius: 6px;
+          padding: 1px 6px;
+        }
 
         input[type=range] {
           -webkit-appearance: none;
@@ -3247,9 +3363,15 @@ export default function Page() {
 
         .stems-grid {
           display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 12px;
           margin-bottom: 18px;
+        }
+
+        @media (max-width: 1120px) {
+          .stems-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
         }
 
         @media (max-width: 760px) {
@@ -3284,9 +3406,18 @@ export default function Page() {
             transform: translateX(24px);
           }
         }
+
+        @media (prefers-reduced-motion: reduce) {
+          .app-shell *,
+          .app-shell *::before,
+          .app-shell *::after {
+            animation: none !important;
+            transition: none !important;
+          }
+        }
       `}</style>
 
-      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <div className="page-container">
         <div style={{ marginBottom: 32 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <div
@@ -4175,22 +4306,6 @@ export default function Page() {
 
         {ready && <GrooveComparison stemUrls={stems} />}
 
-        <div
-          style={{
-            background: "rgba(255,255,255,0.02)",
-            border: "1px solid rgba(255,255,255,0.07)",
-            borderRadius: 14,
-            padding: "18px 20px",
-            fontSize: 12,
-            color: "rgba(255,255,255,0.45)",
-            lineHeight: 1.7,
-          }}
-        >
-          <div style={{ fontFamily: "'Space Mono', monospace", letterSpacing: 2, fontSize: 10, marginBottom: 8 }}>
-            ENGINE NOTES
-          </div>
-          This build uses remote separation through Modal. Set <code>NEXT_PUBLIC_MODAL_SEPARATE_URL</code> in Vercel with your deployed endpoint URL to enable processing.
-        </div>
       </div>
     </div>
   );
