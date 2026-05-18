@@ -43,6 +43,8 @@ const STEMS = [
 ];
 
 const ACCEPT_AUDIO = /\.(wav|mp3|flac|aiff?)$/i;
+const MAX_TRIM_WINDOW_SECONDS = 60;
+const MAX_TRIM_WINDOW_TOAST = "Chicos que vale un .002€ cada vez. jajajajja.";
 
 const STEP_MAP = [
   { max: 10, label: "Loading track" },
@@ -2062,6 +2064,7 @@ export default function Page() {
   const [previewPosition, setPreviewPosition] = useState(null);
   const [editorDragMode, setEditorDragMode] = useState(null);
   const [analysisFile, setAnalysisFile] = useState(null);
+  const [trimWindowToast, setTrimWindowToast] = useState("");
 
   const audioRef = useRef(null);
   const currentAudioSourceRef = useRef({ id: null, url: "" });
@@ -2078,6 +2081,7 @@ export default function Page() {
   const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
   const sequencerLevelsRef = useRef({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
   const hasSequencerSoloRef = useRef(false);
+  const trimToastTimerRef = useRef(null);
 
   const accentColor = "#e8c547";
   const ready = status === "done";
@@ -2283,6 +2287,25 @@ export default function Page() {
     trimStartRef.current = trimStart;
   }, [trimStart]);
 
+  const showTrimWindowLimitToast = useCallback(() => {
+    setTrimWindowToast(MAX_TRIM_WINDOW_TOAST);
+    if (trimToastTimerRef.current) {
+      clearTimeout(trimToastTimerRef.current);
+    }
+    trimToastTimerRef.current = setTimeout(() => {
+      setTrimWindowToast("");
+      trimToastTimerRef.current = null;
+    }, 2600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (trimToastTimerRef.current) {
+        clearTimeout(trimToastTimerRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const audio = new Audio();
     audio.preload = "auto";
@@ -2403,25 +2426,37 @@ export default function Page() {
       const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       const time = ratio * editorDuration;
       const minGap = 0.05;
+      const maxWindow = Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration);
 
       if (drag.mode === "start") {
-        setTrimStart(clamp(time, 0, Math.max(0, trimEnd - minGap)));
+        const minStart = Math.max(0, trimEnd - maxWindow);
+        const maxStart = Math.max(0, trimEnd - minGap);
+        if (time < minStart - 0.0001) {
+          showTrimWindowLimitToast();
+        }
+        setTrimStart(clamp(time, minStart, maxStart));
         return;
       }
 
       if (drag.mode === "end") {
-        setTrimEnd(clamp(time, Math.min(editorDuration, trimStart + minGap), editorDuration));
+        const minEnd = Math.min(editorDuration, trimStart + minGap);
+        const maxEnd = Math.max(minEnd, Math.min(editorDuration, trimStart + maxWindow));
+        if (time > maxEnd + 0.0001) {
+          showTrimWindowLimitToast();
+        }
+        setTrimEnd(clamp(time, minEnd, maxEnd));
         return;
       }
 
       if (drag.mode === "move") {
-        const nextStart = clamp(time - drag.pointerOffset, 0, Math.max(0, editorDuration - drag.selectionLength));
-        const nextEnd = Math.min(editorDuration, nextStart + drag.selectionLength);
+        const lockedSelection = Math.min(drag.selectionLength, maxWindow);
+        const nextStart = clamp(time - drag.pointerOffset, 0, Math.max(0, editorDuration - lockedSelection));
+        const nextEnd = Math.min(editorDuration, nextStart + lockedSelection);
         setTrimStart(nextStart);
         setTrimEnd(nextEnd);
       }
     },
-    [editorDuration, trimEnd, trimStart],
+    [editorDuration, showTrimWindowLimitToast, trimEnd, trimStart],
   );
 
   useEffect(() => {
@@ -2477,7 +2512,7 @@ export default function Page() {
       editorDragRef.current = {
         mode,
         pointerOffset: pointerTime - trimStart,
-        selectionLength: Math.max(0.05, (trimEnd || editorDuration) - trimStart),
+        selectionLength: Math.min(Math.max(0.05, (trimEnd || editorDuration) - trimStart), Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration)),
       };
       setEditorDragMode(mode);
       updateTrimFromPointer(event.clientX);
@@ -2500,7 +2535,7 @@ export default function Page() {
       setEditorError("");
       setEditorDuration(decoded.duration);
       setTrimStart(0);
-      setTrimEnd(decoded.duration);
+      setTrimEnd(Math.min(decoded.duration, MAX_TRIM_WINDOW_SECONDS));
       setFadeInMs(0);
       setFadeOutMs(0);
       setAnalysisFile(incoming);
