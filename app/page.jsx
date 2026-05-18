@@ -1709,7 +1709,43 @@ function drawGrooveComparison(onsetSeries, canvas, activeStemId, viewStart = 0, 
   return { points, maxDuration, windowStart, windowEnd };
 }
 
-function drawGrooveDeviationComparison(seriesList, canvas, activeStemId, viewStart = 0, viewEnd = 1) {
+function drawBezierTrend(ctx, chunk, color, isActive, minY, maxY) {
+  if (!chunk || chunk.length < 2) {
+    return;
+  }
+
+  ctx.strokeStyle = isActive ? color : `${color}88`;
+  ctx.lineWidth = isActive ? 2.6 : 1.5;
+  ctx.globalAlpha = isActive ? 0.92 : 0.34;
+  ctx.beginPath();
+  ctx.moveTo(chunk[0].x, chunk[0].y);
+
+  for (let i = 0; i < chunk.length - 1; i += 1) {
+    const p0 = chunk[Math.max(0, i - 1)];
+    const p1 = chunk[i];
+    const p2 = chunk[i + 1];
+    const p3 = chunk[Math.min(chunk.length - 1, i + 2)];
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = clamp(p1.y + (p2.y - p0.y) / 6, minY, maxY);
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = clamp(p2.y - (p3.y - p1.y) / 6, minY, maxY);
+
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+  }
+
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawGrooveDeviationComparison(
+  seriesList,
+  canvas,
+  activeStemId,
+  viewStart = 0,
+  viewEnd = 1,
+  options = { showPoints: true, showCurve: true },
+) {
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(1, canvas.offsetWidth || 720);
@@ -1774,27 +1810,23 @@ function drawGrooveDeviationComparison(seriesList, canvas, activeStemId, viewSta
 
   activeSeries.forEach((series) => {
     const isActive = series.id === activeStemId;
-    ctx.strokeStyle = isActive ? series.color : `${series.color}66`;
-    ctx.lineWidth = isActive ? 2.8 : 1.2;
-    ctx.globalAlpha = isActive ? 1 : 0.32;
-    ctx.beginPath();
-    let started = false;
+    const chunks = [];
+    let currentChunk = [];
+
     (series.map || []).forEach((value, index) => {
       if (index < startStep || index >= endStep) {
         return;
       }
       if (value === null) {
-        started = false;
+        if (currentChunk.length) {
+          chunks.push(currentChunk);
+          currentChunk = [];
+        }
         return;
       }
       const x = padX + (index - startStep) * cellW + cellW / 2;
       const y = midY - (value / maxAbs) * (midY - padY - 8);
-      if (!started) {
-        ctx.moveTo(x, y);
-        started = true;
-      } else {
-        ctx.lineTo(x, y);
-      }
+      currentChunk.push({ x, y, index, value });
       points.push({
         kind: "deviation",
         stemId: series.id,
@@ -1806,8 +1838,46 @@ function drawGrooveDeviationComparison(seriesList, canvas, activeStemId, viewSta
         y,
       });
     });
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+
+    if (currentChunk.length) {
+      chunks.push(currentChunk);
+    }
+
+    const minY = padY + 2;
+    const maxY = height - padY - 2;
+
+    chunks.forEach((chunk) => {
+      if (!chunk.length) {
+        return;
+      }
+
+      if (options.showPoints) {
+        // Raw points remain the primary source of truth.
+        ctx.strokeStyle = isActive ? `${series.color}bb` : `${series.color}66`;
+        ctx.lineWidth = isActive ? 1.2 : 0.9;
+        ctx.globalAlpha = isActive ? 0.85 : 0.35;
+        ctx.beginPath();
+        ctx.moveTo(chunk[0].x, chunk[0].y);
+        for (let i = 1; i < chunk.length; i += 1) {
+          ctx.lineTo(chunk[i].x, chunk[i].y);
+        }
+        ctx.stroke();
+
+        ctx.fillStyle = isActive ? series.color : `${series.color}88`;
+        ctx.globalAlpha = isActive ? 0.95 : 0.42;
+        chunk.forEach((point) => {
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, isActive ? 2.4 : 1.7, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+      }
+
+      if (options.showCurve) {
+        // Smoothed trend overlay (visual guide only).
+        drawBezierTrend(ctx, chunk, series.color, isActive, minY, maxY);
+      }
+    });
   });
 
   return { points, stepCount, startStep, endStep };
@@ -1829,6 +1899,8 @@ function GrooveComparison({ stemUrls }) {
   const [activeStemId, setActiveStemId] = useState("drums");
   const [rangeStartPct, setRangeStartPct] = useState(0);
   const [rangeEndPct, setRangeEndPct] = useState(100);
+  const [showTrendCurve, setShowTrendCurve] = useState(true);
+  const [showRawPoints, setShowRawPoints] = useState(true);
   const [onsetTooltip, setOnsetTooltip] = useState(null);
   const [deviationTooltip, setDeviationTooltip] = useState(null);
   const comparisonCanvasRef = useRef(null);
@@ -1936,10 +2008,13 @@ function GrooveComparison({ stemUrls }) {
     const viewStart = rangeStartPct / 100;
     const viewEnd = rangeEndPct / 100;
     const onsetResult = drawGrooveComparison(selectedSeries, comparisonCanvasRef.current, activeStemId, viewStart, viewEnd);
-    const deviationResult = drawGrooveDeviationComparison(selectedSeries, deviationCanvasRef.current, activeStemId, viewStart, viewEnd);
+    const deviationResult = drawGrooveDeviationComparison(selectedSeries, deviationCanvasRef.current, activeStemId, viewStart, viewEnd, {
+      showCurve: showTrendCurve,
+      showPoints: showRawPoints,
+    });
     onsetPointsRef.current = onsetResult?.points || [];
     deviationPointsRef.current = deviationResult?.points || [];
-  }, [activeStemId, rangeEndPct, rangeStartPct, selectedSeries]);
+  }, [activeStemId, rangeEndPct, rangeStartPct, selectedSeries, showRawPoints, showTrendCurve]);
 
   const selectedUseful = selectedSeries.filter((item) => item?.selected && item?.stats?.hasUsefulGroove);
   const activeStem = selectedSeries.find((item) => item?.id === activeStemId && item?.selected && item?.stats?.hasUsefulGroove) || selectedUseful[0] || null;
@@ -2199,7 +2274,27 @@ function GrooveComparison({ stemUrls }) {
           </div>
 
           <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1, marginBottom: 8 }}>DESVIACIONES DE GROOVE</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+              <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: GC_TEXT_SECONDARY, letterSpacing: 1 }}>DESVIACIONES DE GROOVE · puntos reales + curva tendencia</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: GC_TEXT_SOFT, fontFamily: "'Space Mono', monospace" }}>
+                  <input
+                    type="checkbox"
+                    checked={showRawPoints}
+                    onChange={() => setShowRawPoints((value) => !value)}
+                  />
+                  Mostrar puntos
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: GC_TEXT_SOFT, fontFamily: "'Space Mono', monospace" }}>
+                  <input
+                    type="checkbox"
+                    checked={showTrendCurve}
+                    onChange={() => setShowTrendCurve((value) => !value)}
+                  />
+                  Mostrar curva
+                </label>
+              </div>
+            </div>
             <div style={{ position: "relative" }}>
               <canvas
                 ref={deviationCanvasRef}
