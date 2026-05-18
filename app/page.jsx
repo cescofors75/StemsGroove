@@ -2065,6 +2065,8 @@ export default function Page() {
 
   const audioRef = useRef(null);
   const currentAudioSourceRef = useRef({ id: null, url: "" });
+  const playingRef = useRef(null);
+  const trimStartRef = useRef(0);
   const fileRef = useRef(null);
   const waveformCanvasRef = useRef(null);
   const editorDragRef = useRef(null);
@@ -2274,12 +2276,26 @@ export default function Page() {
   }, [patternBpm, patternStatus, sequencerPlaying, stopSequencer, triggerSequencerSlice]);
 
   useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
+
+  useEffect(() => {
+    trimStartRef.current = trimStart;
+  }, [trimStart]);
+
+  useEffect(() => {
     const audio = new Audio();
     audio.preload = "auto";
     audioRef.current = audio;
 
     const onEnded = () => setPlaying(null);
     const onError = () => {
+      const hasCurrentSrc = Boolean(audio.currentSrc || audio.getAttribute("src"));
+      const hasTrackedSrc = Boolean(currentAudioSourceRef.current?.url);
+      if (!hasCurrentSrc && !hasTrackedSrc) {
+        return;
+      }
+
       const mediaError = audio.error;
       const details = mediaError
         ? ` (code ${mediaError.code}${mediaError.message ? `: ${mediaError.message}` : ""})`
@@ -2288,13 +2304,13 @@ export default function Page() {
       setPlaying(null);
     };
     const onPause = () => {
-      if (playing !== "original-preview") {
+      if (playingRef.current !== "original-preview") {
         setPreviewPosition(null);
       }
     };
     const onTimeUpdate = () => {
-      if (playing === "original-preview") {
-        setPreviewPosition(audio.currentTime + trimStart);
+      if (playingRef.current === "original-preview") {
+        setPreviewPosition(audio.currentTime + trimStartRef.current);
       }
     };
     audio.addEventListener("ended", onEnded);
@@ -2305,12 +2321,13 @@ export default function Page() {
     return () => {
       audio.pause();
       audio.src = "";
+      currentAudioSourceRef.current = { id: null, url: "" };
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("error", onError);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("timeupdate", onTimeUpdate);
     };
-  }, [playing, trimStart]);
+  }, []);
 
   useEffect(() => {
     if (!playing || !audioRef.current) {
