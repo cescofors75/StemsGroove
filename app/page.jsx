@@ -1047,6 +1047,9 @@ function StemCard({
   onPause,
   onVolumeChange,
   downloadName,
+  wavDownloadName,
+  onDownloadWav,
+  wavDownloadBusy = false,
 }) {
   const isPlaying = playing === stem.id;
 
@@ -1144,6 +1147,32 @@ function StemCard({
                   />
                 </svg>
               </a>
+
+              <button
+                type="button"
+                onClick={() => onDownloadWav?.(stem.id, wavDownloadName)}
+                disabled={wavDownloadBusy}
+                style={{
+                  minWidth: 44,
+                  height: 34,
+                  borderRadius: 17,
+                  border: "1.5px solid rgba(255,255,255,0.28)",
+                  color: wavDownloadBusy ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.82)",
+                  background: "rgba(255,255,255,0.02)",
+                  cursor: wavDownloadBusy ? "progress" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 10,
+                  fontFamily: "'Space Mono', monospace",
+                  letterSpacing: 0.8,
+                  padding: "0 10px",
+                }}
+                title={wavDownloadBusy ? "Convirtiendo a WAV" : "Download stem as WAV"}
+                aria-label={wavDownloadBusy ? `Convirtiendo ${stem.label} a WAV` : `Download ${stem.label} as WAV`}
+              >
+                {wavDownloadBusy ? "..." : "WAV"}
+              </button>
             </>
           )}
         </div>
@@ -2818,11 +2847,22 @@ export default function Page() {
   const sequencerLevelsRef = useRef({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
   const hasSequencerSoloRef = useRef(false);
   const trimToastTimerRef = useRef(null);
+  const stemWavUrlCacheRef = useRef({});
+  const [wavDownloadBusyStem, setWavDownloadBusyStem] = useState("");
 
   const accentColor = "#e8c547";
   const ready = status === "done";
   const processing = status === "processing";
   const analyzingPatterns = patternStatus === "processing";
+
+  const revokeStemWavCache = useCallback(() => {
+    Object.values(stemWavUrlCacheRef.current).forEach((url) => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    });
+    stemWavUrlCacheRef.current = {};
+  }, []);
 
   const modeLabel =
     separateMode === "fast"
@@ -3559,6 +3599,7 @@ export default function Page() {
     if (originalUrl) {
       URL.revokeObjectURL(originalUrl);
     }
+    revokeStemWavCache();
 
     const localUrl = URL.createObjectURL(incoming);
 
@@ -3620,10 +3661,15 @@ export default function Page() {
     handleFile(event.dataTransfer.files[0]);
   }, []);
 
+  useEffect(() => () => {
+    revokeStemWavCache();
+  }, [revokeStemWavCache]);
+
   const clearFile = () => {
     if (originalUrl) {
       URL.revokeObjectURL(originalUrl);
     }
+    revokeStemWavCache();
 
     setFile(null);
     setAnalysisFile(null);
@@ -3736,6 +3782,51 @@ export default function Page() {
 
     await playSource(stemId, url, (volumes[stemId] ?? 85) / 100);
   };
+
+  const downloadStemAsWav = useCallback(async (stemId, filename) => {
+    const stemUrl = stems[stemId];
+    if (!stemUrl) {
+      return;
+    }
+
+    setError("");
+    setWavDownloadBusyStem(stemId);
+
+    try {
+      let wavUrl = stemWavUrlCacheRef.current[stemId];
+      if (!wavUrl) {
+        const response = await fetch(stemUrl);
+        if (!response.ok) {
+          throw new Error("No se pudo leer el stem para convertirlo a WAV.");
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) {
+          throw new Error("Tu navegador no soporta conversion a WAV.");
+        }
+
+        const audioContext = new AudioContextClass();
+        try {
+          const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+          const wavBlob = audioBufferToWavBlob(decoded);
+          wavUrl = URL.createObjectURL(wavBlob);
+          stemWavUrlCacheRef.current[stemId] = wavUrl;
+        } finally {
+          await audioContext.close();
+        }
+      }
+
+      const anchor = document.createElement("a");
+      anchor.href = wavUrl;
+      anchor.download = filename;
+      anchor.click();
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : "No se pudo descargar el stem en WAV.");
+    } finally {
+      setWavDownloadBusyStem("");
+    }
+  }, [stems]);
 
   const toggleOriginalPlayback = async () => {
     if (!originalUrl) {
@@ -4644,6 +4735,9 @@ export default function Page() {
               onPause={pauseStem}
               onVolumeChange={setStemVolume}
               downloadName={`${baseName}_${stem.id}.mp3`}
+              wavDownloadName={`${baseName}_${stem.id}.wav`}
+              onDownloadWav={downloadStemAsWav}
+              wavDownloadBusy={wavDownloadBusyStem === stem.id}
             />
           ))}
         </div>
