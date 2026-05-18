@@ -2827,6 +2827,19 @@ export default function Page() {
       existing.compressor.attack.value = character.compAttack;
       existing.compressor.release.value = character.compRelease;
       existing.masterGain.gain.value = character.masterGain;
+
+      for (const voiceId of ["original", "drums", "bass", "vocals", "other"]) {
+        const chain = existing.voiceChains?.[voiceId];
+        if (!chain) {
+          continue;
+        }
+        const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
+        chain.hp.frequency.value = tone.hp;
+        chain.lp.frequency.value = tone.lp;
+        chain.saturator.curve = getSoftClipCurveCached(tone.drive);
+        chain.saturator.oversample = "none";
+      }
+
       return sequencerMasterBusRef.current;
     }
 
@@ -2845,7 +2858,35 @@ export default function Page() {
     compressor.connect(masterGain);
     masterGain.connect(audioContext.destination);
 
-    const bus = { context: audioContext, input, compressor, masterGain };
+    const voiceChains = {};
+    for (const voiceId of ["original", "drums", "bass", "vocals", "other"]) {
+      const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
+      const voiceInput = audioContext.createGain();
+      voiceInput.gain.value = 1;
+
+      const hp = audioContext.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = tone.hp;
+      hp.Q.value = 0.75;
+
+      const lp = audioContext.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = tone.lp;
+      lp.Q.value = 0.7;
+
+      const saturator = audioContext.createWaveShaper();
+      saturator.curve = getSoftClipCurveCached(tone.drive);
+      saturator.oversample = "none";
+
+      voiceInput.connect(hp);
+      hp.connect(lp);
+      lp.connect(saturator);
+      saturator.connect(input);
+
+      voiceChains[voiceId] = { input: voiceInput, hp, lp, saturator };
+    }
+
+    const bus = { context: audioContext, input, compressor, masterGain, voiceChains };
     sequencerMasterBusRef.current = bus;
     return bus;
   }, [sequencerCharacter]);
@@ -2874,6 +2915,10 @@ export default function Page() {
     }
 
     const bus = ensureSequencerBus(audioContext);
+    const voiceChain = bus.voiceChains?.[voiceId];
+    if (!voiceChain?.input) {
+      return;
+    }
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
@@ -2887,40 +2932,15 @@ export default function Page() {
       voiceId === "other" ? 0.54 :
       0.42;
     const levelScale = Math.max(0, Math.min(1, (sequencerLevelsRef.current[voiceId] ?? 85) / 100));
-    const targetGain = Math.max(0.0001, baseGain * levelScale * (0.4 + intensityScale * 0.75));
+    const targetGain = Math.max(0.0001, baseGain * levelScale * (0.3 + intensityScale * 0.55));
 
     const attackTime = Math.max(0.004, tone.attack);
     gain.gain.setValueAtTime(0.0001, time);
     gain.gain.exponentialRampToValueAtTime(targetGain, time + attackTime);
     gain.gain.exponentialRampToValueAtTime(0.0001, time + totalDuration);
 
-    const hp = audioContext.createBiquadFilter();
-    hp.type = "highpass";
-    hp.frequency.value = tone.hp;
-    hp.Q.value = 0.75;
-
-    const lp = audioContext.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.frequency.value = tone.lp;
-    lp.Q.value = 0.7;
-
-    const saturator = audioContext.createWaveShaper();
-    saturator.curve = getSoftClipCurveCached(tone.drive * (0.85 + intensityScale * 0.3));
-    saturator.oversample = sequencerCharacter === "warm" ? "2x" : "none";
-
     source.connect(gain);
-    gain.connect(hp);
-    hp.connect(lp);
-    lp.connect(saturator);
-
-    if (typeof audioContext.createStereoPanner === "function") {
-      const panner = audioContext.createStereoPanner();
-      panner.pan.value = (Math.random() * 2 - 1) * tone.pan;
-      saturator.connect(panner);
-      panner.connect(bus.input);
-    } else {
-      saturator.connect(bus.input);
-    }
+    gain.connect(voiceChain.input);
 
     source.start(time, offset);
     source.stop(time + totalDuration);
