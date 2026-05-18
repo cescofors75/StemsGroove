@@ -2717,6 +2717,7 @@ export default function Page() {
   const sequencerTimerRef = useRef(null);
   const sequencerAudioCtxRef = useRef(null);
   const sequencerSourcesRef = useRef({});
+  const sequencerActiveVoicesRef = useRef({});
   const sequencerMasterBusRef = useRef(null);
   const displayedPatternsRef = useRef({});
   const sequencerMuteRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
@@ -2814,6 +2815,18 @@ export default function Page() {
       clearInterval(sequencerTimerRef.current);
       sequencerTimerRef.current = null;
     }
+    const audioContext = sequencerAudioCtxRef.current;
+    const stopTime = audioContext && audioContext.state !== "closed" ? audioContext.currentTime : 0;
+    for (const active of Object.values(sequencerActiveVoicesRef.current)) {
+      try {
+        active.gain?.gain?.cancelScheduledValues(stopTime);
+        active.gain?.gain?.setTargetAtTime(0.0001, stopTime, 0.006);
+        active.source?.stop(stopTime + 0.035);
+      } catch {
+        // The source may already have ended.
+      }
+    }
+    sequencerActiveVoicesRef.current = {};
     setSequencerPlaying(false);
     setPlayheadStep(-1);
   }, []);
@@ -2910,13 +2923,23 @@ export default function Page() {
     const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
     const gateDuration = Math.min(sourceInfo.stepDuration * durationShape * (0.55 + intensityScale * 0.7), maxDuration);
     const tailDuration = Math.min(tone.release, Math.max(0, maxDuration - gateDuration));
-    const totalDuration = gateDuration + tailDuration;
+    const totalDuration = Math.min(gateDuration + tailDuration, sourceInfo.stepDuration * 0.92, maxDuration);
     if (totalDuration < 0.02) {
       return;
     }
 
     const bus = ensureSequencerBus(audioContext);
     const character = getSequencerCharacterProfile(sequencerCharacter);
+    const previous = sequencerActiveVoicesRef.current[voiceId];
+    if (previous) {
+      try {
+        previous.gain?.gain?.cancelScheduledValues(time);
+        previous.gain?.gain?.setTargetAtTime(0.0001, time, 0.006);
+        previous.source?.stop(time + 0.035);
+      } catch {
+        // The source may already have ended.
+      }
+    }
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
@@ -2939,6 +2962,13 @@ export default function Page() {
 
     source.connect(gain);
     gain.connect(bus.input);
+
+    sequencerActiveVoicesRef.current[voiceId] = { source, gain };
+    source.onended = () => {
+      if (sequencerActiveVoicesRef.current[voiceId]?.source === source) {
+        delete sequencerActiveVoicesRef.current[voiceId];
+      }
+    };
 
     source.start(time, offset);
     source.stop(time + totalDuration);
@@ -2990,8 +3020,19 @@ export default function Page() {
       const activeMute = sequencerMuteRef.current;
       const activeSolo = sequencerSoloRef.current;
       const soloEnabled = hasSequencerSoloRef.current;
+      const enabledStemKeys = keys.filter((key) => {
+        if (key === "original") {
+          return false;
+        }
+        const hasPattern = Boolean(activePatterns[key]?.length);
+        return hasPattern && !activeMute[key] && (!soloEnabled || activeSolo[key]);
+      });
+      const shouldSkipOriginal = enabledStemKeys.length > 0 && !(soloEnabled && activeSolo.original);
 
       for (const key of keys) {
+        if (key === "original" && shouldSkipOriginal) {
+          continue;
+        }
         const row = activePatterns[key];
         const stepValue = row?.[step] ?? 0;
         const allowed = !activeMute[key] && (!soloEnabled || activeSolo[key]);
