@@ -2836,7 +2836,7 @@ export default function Page() {
       return sequencerMasterBusRef.current;
     }
     const input = audioContext.createGain();
-    input.gain.value = 0.75;
+    input.gain.value = 0.85;
     input.connect(audioContext.destination);
     const bus = { context: audioContext, input };
     sequencerMasterBusRef.current = bus;
@@ -2929,46 +2929,52 @@ export default function Page() {
     }
     ensureSequencerBus(audioContext);
 
-    const stepMs = (60_000 / Math.max(1, patternBpm || 120)) / 4;
-    let step = 0;
+    const stepDur = (60 / Math.max(1, patternBpm || 120)) / 4;
     setPlayheadStep(0);
     setSequencerPlaying(true);
 
     const keys = ["original", "drums", "bass", "vocals", "other"];
     const stepCount = Math.max(...keys.map((key) => displayedPatternsRef.current[key]?.length || 0), 16);
-    const tick = () => {
-      setPlayheadStep(step);
 
+    // Web Audio lookahead scheduler: sample-accurate timing, immune to JS jitter.
+    let nextStep = 0;
+    let nextStepTime = audioContext.currentTime + 0.05;
+    const lookahead = 0.12; // seconds scheduled in advance
+    const tick = () => {
       const activePatterns = displayedPatternsRef.current;
       const activeMute = sequencerMuteRef.current;
       const activeSolo = sequencerSoloRef.current;
       const soloEnabled = hasSequencerSoloRef.current;
       const enabledStemKeys = keys.filter((key) => {
-        if (key === "original") {
-          return false;
-        }
+        if (key === "original") return false;
         const hasPattern = Boolean(activePatterns[key]?.length);
         return hasPattern && !activeMute[key] && (!soloEnabled || activeSolo[key]);
       });
       const shouldSkipOriginal = enabledStemKeys.length > 0 && !(soloEnabled && activeSolo.original);
 
-      for (const key of keys) {
-        if (key === "original" && shouldSkipOriginal) {
-          continue;
-        }
-        const row = activePatterns[key];
-        const stepValue = row?.[step] ?? 0;
-        const allowed = !activeMute[key] && (!soloEnabled || activeSolo[key]);
-        if (allowed && stepValue >= 0.08) {
-          triggerSequencerSlice(audioContext, key, step, audioContext.currentTime + 0.02, stepValue);
-        }
-      }
+      while (nextStepTime < audioContext.currentTime + lookahead) {
+        const scheduledStep = nextStep;
+        const scheduledTime = nextStepTime;
+        const visualDelay = Math.max(0, (scheduledTime - audioContext.currentTime) * 1000);
+        setTimeout(() => setPlayheadStep(scheduledStep), visualDelay);
 
-      step = (step + 1) % stepCount;
+        for (const key of keys) {
+          if (key === "original" && shouldSkipOriginal) continue;
+          const row = activePatterns[key];
+          const stepValue = row?.[scheduledStep] ?? 0;
+          const allowed = !activeMute[key] && (!soloEnabled || activeSolo[key]);
+          if (allowed && stepValue >= 0.04) {
+            triggerSequencerSlice(audioContext, key, scheduledStep, scheduledTime, stepValue);
+          }
+        }
+
+        nextStep = (nextStep + 1) % stepCount;
+        nextStepTime += stepDur;
+      }
     };
 
     tick();
-    sequencerTimerRef.current = setInterval(tick, stepMs);
+    sequencerTimerRef.current = setInterval(tick, 25);
   }, [ensureSequencerBus, patternBpm, patternStatus, sequencerPlaying, stopSequencer, triggerSequencerSlice]);
 
   useEffect(() => {
