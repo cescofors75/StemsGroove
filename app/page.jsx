@@ -2862,8 +2862,12 @@ export default function Page() {
     const previous = sequencerActiveVoicesRef.current[voiceId];
     if (previous) {
       try {
-        previous.gain.gain.cancelScheduledValues(time);
-        previous.gain.gain.setValueAtTime(previous.gain.gain.value, time);
+        if (typeof previous.gain.gain.cancelAndHoldAtTime === "function") {
+          previous.gain.gain.cancelAndHoldAtTime(time);
+        } else {
+          previous.gain.gain.cancelScheduledValues(time);
+          previous.gain.gain.setValueAtTime(previous.gain.gain.value, time);
+        }
         previous.gain.gain.linearRampToValueAtTime(0, time + 0.012);
         previous.source.stop(time + 0.05);
       } catch {
