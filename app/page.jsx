@@ -878,12 +878,33 @@ function createSoftClipCurve(amount = 1) {
   return curve;
 }
 
-function getSequencerVoiceTone(voiceId) {
-  if (voiceId === "drums") return { hp: 38, lp: 9800, drive: 1.35, pan: 0.08, attack: 0.003, release: 0.08, rateJitter: 0.012 };
-  if (voiceId === "bass") return { hp: 28, lp: 2300, drive: 1.22, pan: 0.02, attack: 0.006, release: 0.16, rateJitter: 0.004 };
-  if (voiceId === "vocals") return { hp: 120, lp: 7600, drive: 1.12, pan: 0.12, attack: 0.008, release: 0.14, rateJitter: 0.008 };
-  if (voiceId === "other") return { hp: 90, lp: 8600, drive: 1.18, pan: 0.16, attack: 0.006, release: 0.12, rateJitter: 0.01 };
-  return { hp: 35, lp: 12000, drive: 1.08, pan: 0.04, attack: 0.006, release: 0.12, rateJitter: 0.006 };
+const SOFT_CLIP_CACHE = new Map();
+
+function getSoftClipCurveCached(amount = 1) {
+  const key = Math.round(Math.max(0.1, Math.min(3, amount)) * 20) / 20;
+  if (!SOFT_CLIP_CACHE.has(key)) {
+    SOFT_CLIP_CACHE.set(key, createSoftClipCurve(key));
+  }
+  return SOFT_CLIP_CACHE.get(key);
+}
+
+function getSequencerCharacterProfile(character = "punch") {
+  if (character === "clean") {
+    return { driveMul: 0.72, compThreshold: -14, compRatio: 2.2, compAttack: 0.008, compRelease: 0.16, masterGain: 0.86, jitterMul: 0.7 };
+  }
+  if (character === "warm") {
+    return { driveMul: 1.32, compThreshold: -20, compRatio: 3.8, compAttack: 0.0025, compRelease: 0.24, masterGain: 0.92, jitterMul: 1.05 };
+  }
+  return { driveMul: 1, compThreshold: -18, compRatio: 3.4, compAttack: 0.003, compRelease: 0.18, masterGain: 0.9, jitterMul: 1 };
+}
+
+function getSequencerVoiceTone(voiceId, character = "punch") {
+  const profile = getSequencerCharacterProfile(character);
+  if (voiceId === "drums") return { hp: 38, lp: character === "warm" ? 8600 : 9800, drive: 1.35 * profile.driveMul, pan: 0.08, attack: 0.003, release: 0.08, rateJitter: 0.012 * profile.jitterMul };
+  if (voiceId === "bass") return { hp: 28, lp: character === "clean" ? 2800 : 2300, drive: 1.22 * profile.driveMul, pan: 0.02, attack: 0.006, release: 0.16, rateJitter: 0.004 * profile.jitterMul };
+  if (voiceId === "vocals") return { hp: 120, lp: character === "warm" ? 6900 : 7600, drive: 1.12 * profile.driveMul, pan: 0.12, attack: 0.008, release: 0.14, rateJitter: 0.008 * profile.jitterMul };
+  if (voiceId === "other") return { hp: 90, lp: character === "clean" ? 9400 : 8600, drive: 1.18 * profile.driveMul, pan: 0.16, attack: 0.006, release: 0.12, rateJitter: 0.01 * profile.jitterMul };
+  return { hp: 35, lp: 12000, drive: 1.08 * profile.driveMul, pan: 0.04, attack: 0.006, release: 0.12, rateJitter: 0.006 * profile.jitterMul };
 }
 
 function AnimatedWaveform({ color, active, small = false }) {
@@ -2666,6 +2687,7 @@ export default function Page() {
   const [sequencerPlaying, setSequencerPlaying] = useState(false);
   const [playheadStep, setPlayheadStep] = useState(-1);
   const [patternBars, setPatternBars] = useState(4);
+  const [sequencerCharacter, setSequencerCharacter] = useState("punch");
   const [separateMode, setSeparateMode] = useState("fast");
   const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85 });
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
@@ -2796,20 +2818,28 @@ export default function Page() {
   }, []);
 
   const ensureSequencerBus = useCallback((audioContext) => {
+    const character = getSequencerCharacterProfile(sequencerCharacter);
+
     if (sequencerMasterBusRef.current?.context === audioContext) {
+      const existing = sequencerMasterBusRef.current;
+      existing.compressor.threshold.value = character.compThreshold;
+      existing.compressor.ratio.value = character.compRatio;
+      existing.compressor.attack.value = character.compAttack;
+      existing.compressor.release.value = character.compRelease;
+      existing.masterGain.gain.value = character.masterGain;
       return sequencerMasterBusRef.current;
     }
 
     const input = audioContext.createGain();
     const compressor = audioContext.createDynamicsCompressor();
-    compressor.threshold.value = -18;
+    compressor.threshold.value = character.compThreshold;
     compressor.knee.value = 18;
-    compressor.ratio.value = 3.4;
-    compressor.attack.value = 0.003;
-    compressor.release.value = 0.18;
+    compressor.ratio.value = character.compRatio;
+    compressor.attack.value = character.compAttack;
+    compressor.release.value = character.compRelease;
 
     const masterGain = audioContext.createGain();
-    masterGain.gain.value = 0.9;
+    masterGain.gain.value = character.masterGain;
 
     input.connect(compressor);
     compressor.connect(masterGain);
@@ -2818,7 +2848,7 @@ export default function Page() {
     const bus = { context: audioContext, input, compressor, masterGain };
     sequencerMasterBusRef.current = bus;
     return bus;
-  }, []);
+  }, [sequencerCharacter]);
 
   const triggerSequencerSlice = useCallback((audioContext, voiceId, step, time, intensity = 1) => {
     const sourceInfo = sequencerSourcesRef.current[voiceId];
@@ -2835,8 +2865,10 @@ export default function Page() {
       voiceId === "vocals" ? 1.35 :
       voiceId === "other" ? 1.15 :
       0.88;
-    const duration = Math.min(sourceInfo.stepDuration * durationShape * (0.55 + intensityScale * 0.7), maxDuration);
-    if (duration < 0.02) {
+    const gateDuration = Math.min(sourceInfo.stepDuration * durationShape * (0.55 + intensityScale * 0.7), maxDuration);
+    const tailDuration = Math.min(tone.release, Math.max(0, maxDuration - gateDuration));
+    const totalDuration = gateDuration + tailDuration;
+    if (totalDuration < 0.02) {
       return;
     }
 
@@ -2844,7 +2876,7 @@ export default function Page() {
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
-    const tone = getSequencerVoiceTone(voiceId);
+    const tone = getSequencerVoiceTone(voiceId, sequencerCharacter);
     source.playbackRate.value = 1 + (Math.random() * 2 - 1) * tone.rateJitter;
 
     const gain = audioContext.createGain();
@@ -2857,9 +2889,10 @@ export default function Page() {
     const levelScale = Math.max(0, Math.min(1, (sequencerLevelsRef.current[voiceId] ?? 85) / 100));
     const targetGain = Math.max(0.0001, baseGain * levelScale * (0.4 + intensityScale * 0.75));
 
+    const attackTime = Math.max(0.004, tone.attack);
     gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(targetGain, time + tone.attack);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + duration + tone.release);
+    gain.gain.exponentialRampToValueAtTime(targetGain, time + attackTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + totalDuration);
 
     const hp = audioContext.createBiquadFilter();
     hp.type = "highpass";
@@ -2872,8 +2905,8 @@ export default function Page() {
     lp.Q.value = 0.7;
 
     const saturator = audioContext.createWaveShaper();
-    saturator.curve = createSoftClipCurve(tone.drive * (0.85 + intensityScale * 0.3));
-    saturator.oversample = "2x";
+    saturator.curve = getSoftClipCurveCached(tone.drive * (0.85 + intensityScale * 0.3));
+    saturator.oversample = sequencerCharacter === "warm" ? "2x" : "none";
 
     source.connect(gain);
     gain.connect(hp);
@@ -2889,8 +2922,9 @@ export default function Page() {
       saturator.connect(bus.input);
     }
 
-    source.start(time, offset, duration);
-  }, [ensureSequencerBus]);
+    source.start(time, offset);
+    source.stop(time + totalDuration);
+  }, [ensureSequencerBus, sequencerCharacter]);
 
   const toggleSequencer = useCallback(async () => {
     if (sequencerPlaying) {
@@ -2944,7 +2978,7 @@ export default function Page() {
         const stepValue = row?.[step] ?? 0;
         const allowed = !activeMute[key] && (!soloEnabled || activeSolo[key]);
         if (allowed && stepValue >= 0.08) {
-          triggerSequencerSlice(audioContext, key, step, audioContext.currentTime + 0.005, stepValue);
+          triggerSequencerSlice(audioContext, key, step, audioContext.currentTime + 0.02, stepValue);
         }
       }
 
@@ -2954,6 +2988,12 @@ export default function Page() {
     tick();
     sequencerTimerRef.current = setInterval(tick, stepMs);
   }, [ensureSequencerBus, patternBpm, patternStatus, sequencerPlaying, stopSequencer, triggerSequencerSlice]);
+
+  useEffect(() => {
+    if (sequencerAudioCtxRef.current && sequencerAudioCtxRef.current.state !== "closed") {
+      ensureSequencerBus(sequencerAudioCtxRef.current);
+    }
+  }, [ensureSequencerBus, sequencerCharacter]);
 
   useEffect(() => {
     playingRef.current = playing;
@@ -4598,15 +4638,46 @@ export default function Page() {
                     >
                       {sequencerPlaying ? "PAUSE SEQ" : "PLAY SEQ"}
                     </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+                      {[
+                        { id: "clean", label: "CLEAN" },
+                        { id: "punch", label: "PUNCH" },
+                        { id: "warm", label: "WARM" },
+                      ].map((mode) => (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          onClick={() => setSequencerCharacter(mode.id)}
+                          style={{
+                            border: `1px solid ${sequencerCharacter === mode.id ? accentColor : "rgba(255,255,255,0.2)"}`,
+                            color: sequencerCharacter === mode.id ? accentColor : "rgba(255,255,255,0.65)",
+                            background: "transparent",
+                            borderRadius: 999,
+                            fontSize: 10,
+                            letterSpacing: 1,
+                            padding: "4px 9px",
+                            cursor: "pointer",
+                            fontFamily: "'Space Mono', monospace",
+                          }}
+                        >
+                          {mode.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {patternBpm ? (
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: accentColor }}>
-                  EST BPM {patternBpm}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {patternBpm ? (
+                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: accentColor }}>
+                    EST BPM {patternBpm}
+                  </div>
+                ) : null}
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.18)", borderRadius: 999, padding: "2px 8px", letterSpacing: 0.8 }}>
+                  CHARACTER {sequencerCharacter.toUpperCase()}
                 </div>
-              ) : null}
+              </div>
             </div>
 
             <div
