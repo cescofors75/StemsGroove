@@ -890,17 +890,17 @@ function getSoftClipCurveCached(amount = 1) {
 
 function getSequencerCharacterProfile(character = "punch") {
   if (character === "clean") {
-    return { driveMul: 0.72, compThreshold: -14, compRatio: 2.2, compAttack: 0.008, compRelease: 0.16, masterGain: 0.86, jitterMul: 0.7 };
+    return { driveMul: 0.72, compThreshold: -12, compRatio: 1.8, compAttack: 0.008, compRelease: 0.16, masterGain: 0.92, jitterMul: 0, gainMul: 0.95 };
   }
   if (character === "warm") {
-    return { driveMul: 1.32, compThreshold: -20, compRatio: 3.8, compAttack: 0.0025, compRelease: 0.24, masterGain: 0.92, jitterMul: 1.05 };
+    return { driveMul: 1, compThreshold: -16, compRatio: 2.4, compAttack: 0.004, compRelease: 0.22, masterGain: 0.94, jitterMul: 0, gainMul: 1.04 };
   }
-  return { driveMul: 1, compThreshold: -18, compRatio: 3.4, compAttack: 0.003, compRelease: 0.18, masterGain: 0.9, jitterMul: 1 };
+  return { driveMul: 1, compThreshold: -15, compRatio: 2.6, compAttack: 0.004, compRelease: 0.18, masterGain: 0.96, jitterMul: 0, gainMul: 1.12 };
 }
 
 function getSequencerVoiceTone(voiceId, character = "punch") {
   const profile = getSequencerCharacterProfile(character);
-  const jitterBase = character === "warm" ? 0.0012 : character === "punch" ? 0.0007 : 0;
+  const jitterBase = 0;
   if (voiceId === "drums") return { hp: 34, lp: character === "warm" ? 8400 : 9300, drive: 1.35 * profile.driveMul, pan: 0.08, attack: 0.003, release: 0.08, rateJitter: jitterBase * profile.jitterMul };
   if (voiceId === "bass") return { hp: 24, lp: character === "clean" ? 3000 : 2500, drive: 1.22 * profile.driveMul, pan: 0.02, attack: 0.006, release: 0.16, rateJitter: (jitterBase * 0.5) * profile.jitterMul };
   if (voiceId === "vocals") return { hp: 95, lp: character === "warm" ? 6700 : 7300, drive: 1.12 * profile.driveMul, pan: 0.12, attack: 0.008, release: 0.14, rateJitter: (jitterBase * 0.45) * profile.jitterMul };
@@ -2916,15 +2916,11 @@ export default function Page() {
     }
 
     const bus = ensureSequencerBus(audioContext);
-    const voiceChain = bus.voiceChains?.[voiceId];
-    if (!voiceChain?.input) {
-      return;
-    }
+    const character = getSequencerCharacterProfile(sequencerCharacter);
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
-    const randomJitter = (Math.random() * 2 - 1) * tone.rateJitter;
-    source.playbackRate.value = clamp(1 + randomJitter, 0.9985, 1.0015);
+    source.playbackRate.value = 1;
 
     const gain = audioContext.createGain();
     const baseGain =
@@ -2934,7 +2930,7 @@ export default function Page() {
       voiceId === "other" ? 0.54 :
       0.42;
     const levelScale = Math.max(0, Math.min(1, (sequencerLevelsRef.current[voiceId] ?? 85) / 100));
-    const targetGain = Math.max(0.0001, baseGain * levelScale * (0.3 + intensityScale * 0.55));
+    const targetGain = Math.max(0.0001, baseGain * character.gainMul * levelScale * (0.48 + intensityScale * 0.82));
 
     const attackTime = Math.max(0.004, tone.attack);
     gain.gain.setValueAtTime(0.0001, time);
@@ -2942,7 +2938,7 @@ export default function Page() {
     gain.gain.exponentialRampToValueAtTime(0.0001, time + totalDuration);
 
     source.connect(gain);
-    gain.connect(voiceChain.input);
+    gain.connect(bus.input);
 
     source.start(time, offset);
     source.stop(time + totalDuration);
