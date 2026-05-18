@@ -522,7 +522,7 @@ function grooveDetectOnsets(buffer, thr) {
 
   const sr = buffer.sampleRate;
   const windowSize = Math.max(256, Math.floor(sr * 0.01));
-  const hopSize = Math.max(128, Math.floor(windowSize / 2));
+  const hopSize = Math.max(64, Math.floor(windowSize / 4));
   const minGap = Math.floor(sr * 0.05);
   let prev = 0;
   const fluxValues = [];
@@ -536,7 +536,7 @@ function grooveDetectOnsets(buffer, thr) {
   }
 
   const sortedFlux = [...fluxValues].sort((a, b) => a - b);
-  const percentileIndex = Math.max(0, Math.min(sortedFlux.length - 1, Math.floor(sortedFlux.length * (0.82 + thr * 0.12))));
+  const percentileIndex = Math.max(0, Math.min(sortedFlux.length - 1, Math.floor(sortedFlux.length * (0.78 + thr * 0.16))));
   const adaptiveThreshold = sortedFlux[percentileIndex] ?? 0;
 
   prev = 0;
@@ -547,7 +547,7 @@ function grooveDetectOnsets(buffer, thr) {
     for (let j = 0; j < windowSize; j += 1) energy += mono[i + j] ** 2;
     energy = Math.sqrt(energy / windowSize);
     const flux = Math.max(0, energy - prev);
-    if (flux >= adaptiveThreshold && i - lastOnset > minGap) {
+    if (flux >= adaptiveThreshold * 0.95 && i - lastOnset > minGap) {
       found.push(i / sr);
       lastOnset = i;
     }
@@ -599,7 +599,7 @@ function grooveBuildMap(buffer, bpm, subdivision, thr) {
   const detectedBpm = grooveEstimateBpm(onsets);
   const activeBpm = detectedBpm || bpm || 120;
   const stepDuration = 60 / activeBpm / (subdivision / 4);
-  const numSteps = Math.max(1, Math.round(buffer.duration / stepDuration));
+  const numSteps = Math.max(2, Math.round(buffer.duration / stepDuration));
   const map = new Array(numSteps).fill(null);
   const deviations = [];
   for (const onset of onsets) {
@@ -610,7 +610,7 @@ function grooveBuildMap(buffer, bpm, subdivision, thr) {
     const signedOffset = relativePosition <= 0.5 ? relativePosition : relativePosition - 1;
     const deviationMs = signedOffset * stepDuration * 1000;
     deviations.push(deviationMs);
-    if (map[stepN] === null || Math.abs(deviationMs) > Math.abs(map[stepN])) {
+    if (map[stepN] === null || Math.abs(deviationMs) < Math.abs(map[stepN])) {
       map[stepN] = deviationMs;
     }
   }
@@ -624,7 +624,7 @@ function grooveBuildMap(buffer, bpm, subdivision, thr) {
     : 0;
   const deviationStd = Math.sqrt(deviationVariance);
   const uniqueRoundedCount = new Set(mapped.map((value) => Math.round(value))).size;
-  const hasUsefulGroove = mapped.length >= 3 && deviationStd >= 3 && uniqueRoundedCount >= 2;
+  const hasUsefulGroove = mapped.length >= 2 && deviationStd >= 2.5 && uniqueRoundedCount >= 1;
   return {
     map,
     numSteps,
@@ -2047,7 +2047,7 @@ export default function Page() {
   const [creativeToolsVisible, setCreativeToolsVisible] = useState(false);
   const [sequencerPlaying, setSequencerPlaying] = useState(false);
   const [playheadStep, setPlayheadStep] = useState(-1);
-  const [patternBars, setPatternBars] = useState(2);
+  const [patternBars, setPatternBars] = useState(4);
   const [separateMode, setSeparateMode] = useState("fast");
   const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85 });
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
@@ -2726,7 +2726,7 @@ export default function Page() {
     setPatternError("");
     setPatternMode("extract");
     setGenerationSeed(1);
-    setPatternBars(2);
+    setPatternBars(4);
     setCreativeToolsVisible(false);
     setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false });
     setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false });
@@ -3062,6 +3062,28 @@ export default function Page() {
           from { transform: scaleY(0.82); }
           to { transform: scaleY(1.08); }
         }
+
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateX(24px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes slideOut {
+          from {
+            opacity: 1;
+            transform: translateX(0);
+          }
+          to {
+            opacity: 0;
+            transform: translateX(24px);
+          }
+        }
       `}</style>
 
       <div style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -3282,6 +3304,29 @@ export default function Page() {
             {error}
           </div>
         )}
+
+            {trimWindowToast && (
+              <div
+                style={{
+                  position: "fixed",
+                  top: 20,
+                  right: 20,
+                  background: "linear-gradient(135deg, rgba(232,197,71,0.28), rgba(232,197,71,0.12))",
+                  border: "1px solid rgba(232,197,71,0.45)",
+                  borderRadius: 12,
+                  padding: "14px 18px",
+                  fontSize: 13,
+                  color: "#e8c547",
+                  fontFamily: "'Space Mono', monospace",
+                  maxWidth: 280,
+                  zIndex: 9999,
+                  boxShadow: "0 4px 12px rgba(232,197,71,0.2)",
+                  animation: "slideIn 0.3s ease, slideOut 0.3s ease 2.3s",
+                }}
+              >
+                {trimWindowToast}
+              </div>
+            )}
 
         {editorError && (
           <div
