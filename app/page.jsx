@@ -281,6 +281,108 @@ function audioBufferToWavBlob(audioBuffer) {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
+async function renderSequencerOffline({
+  sourceMap,
+  patterns,
+  bpm,
+  patternBars,
+  levels,
+  mute,
+  solo,
+  sampleRate = 44100,
+}) {
+  const OfflineCtx =
+    (typeof window !== "undefined" && (window.OfflineAudioContext || window.webkitOfflineAudioContext)) || null;
+  if (!OfflineCtx) {
+    throw new Error("Tu navegador no soporta OfflineAudioContext.");
+  }
+
+  const keys = ["original", "drums", "bass", "vocals", "other"];
+  const safeBpm = Math.max(1, bpm || 120);
+  const stepDur = 60 / safeBpm / 4;
+  const stepCount = 16 * Math.max(1, patternBars || 1);
+  const tail = 0.4;
+  const totalSeconds = stepCount * stepDur + tail;
+  const length = Math.max(1, Math.ceil(totalSeconds * sampleRate));
+  const ctx = new OfflineCtx(2, length, sampleRate);
+
+  const master = ctx.createGain();
+  master.gain.value = 0.85;
+  master.connect(ctx.destination);
+
+  const soloEnabled = Object.values(solo || {}).some(Boolean);
+  const enabledStemKeys = keys.filter((k) => {
+    if (k === "original") return false;
+    if (!patterns?.[k]?.length) return false;
+    if (mute?.[k]) return false;
+    if (soloEnabled && !solo?.[k]) return false;
+    return true;
+  });
+  const shouldSkipOriginal = enabledStemKeys.length > 0 && !(soloEnabled && solo?.original);
+
+  const lastByVoice = {};
+
+  for (let step = 0; step < stepCount; step += 1) {
+    const time = step * stepDur;
+    for (const voiceId of keys) {
+      if (voiceId === "original" && shouldSkipOriginal) continue;
+      const allowed = !mute?.[voiceId] && (!soloEnabled || solo?.[voiceId]);
+      if (!allowed) continue;
+      const stepValue = patterns?.[voiceId]?.[step] ?? 0;
+      const threshold = voiceId === "drums" ? 0.6 : 0.04;
+      if (stepValue < threshold) continue;
+
+      const source = sourceMap?.[voiceId];
+      if (!source?.buffer || !source.stepDuration) continue;
+
+      const baseOffset = step * source.stepDuration;
+      const onsetOffset = source.onsetOffsets?.[step] ?? 0;
+      const offset = Math.max(0, Math.min(source.buffer.duration, baseOffset + onsetOffset));
+      const maxDuration = Math.max(0, source.buffer.duration - offset);
+      const durationCap = voiceId === "drums" ? source.stepDuration * 0.55 : source.stepDuration;
+      const duration = Math.min(durationCap, maxDuration);
+      if (duration < 0.02) continue;
+
+      const prev = lastByVoice[voiceId];
+      if (prev) {
+        try {
+          if (typeof prev.gain.gain.cancelAndHoldAtTime === "function") {
+            prev.gain.gain.cancelAndHoldAtTime(time);
+          } else {
+            prev.gain.gain.cancelScheduledValues(time);
+          }
+          prev.gain.gain.linearRampToValueAtTime(0, time + 0.012);
+          prev.source.stop(time + 0.05);
+        } catch {
+          // already ended
+        }
+      }
+
+      const levelScale = Math.max(0, Math.min(1, (levels?.[voiceId] ?? 85) / 100));
+      const vol = levelScale * Math.max(0.1, Math.min(1, stepValue));
+
+      const src = ctx.createBufferSource();
+      src.buffer = source.buffer;
+      const gain = ctx.createGain();
+      const attack = 0.005;
+      const release = Math.min(0.02, duration * 0.25);
+      gain.gain.setValueAtTime(0, time);
+      gain.gain.linearRampToValueAtTime(vol, time + attack);
+      gain.gain.setValueAtTime(vol, time + Math.max(attack, duration - release));
+      gain.gain.linearRampToValueAtTime(0, time + duration);
+
+      src.connect(gain);
+      gain.connect(master);
+      src.start(time, offset);
+      src.stop(time + duration + 0.01);
+
+      lastByVoice[voiceId] = { source: src, gain };
+    }
+  }
+
+  return ctx.startRendering();
+}
+
 function estimateBpm(mono, sampleRate) {
   const hop = 1024;
   const frameCount = Math.max(1, Math.floor(mono.length / hop));
@@ -2851,6 +2953,7 @@ export default function Page() {
   const [generationSeed, setGenerationSeed] = useState(1);
   const [creativeToolsVisible, setCreativeToolsVisible] = useState(false);
   const [sequencerPlaying, setSequencerPlaying] = useState(false);
+  const [sequencerBouncing, setSequencerBouncing] = useState(false);
   const [playheadStep, setPlayheadStep] = useState(-1);
   const [patternBars, setPatternBars] = useState(4);
   const [sequencerCharacter, setSequencerCharacter] = useState("punch");
@@ -3057,6 +3160,44 @@ export default function Page() {
     const midi = buildSequencerMidiFile({ bpm: patternBpm || 120, tracks });
     grooveDownload(`${baseName || "track"}-sequencer.mid`, midi, "audio/midi");
   }, [baseName, displayedPatterns, hasSequencerSolo, patternBpm, patternStatus, sequencerLevels, sequencerMute, sequencerSolo]);
+
+  const bounceSequencerWav = useCallback(async () => {
+    if (patternStatus !== "done") {
+      return;
+    }
+    if (!Object.keys(sequencerSourcesRef.current).length) {
+      setPatternError("No hay material analizado para hacer bounce.");
+      return;
+    }
+    setSequencerBouncing(true);
+    setPatternError("");
+    try {
+      const renderedBuffer = await renderSequencerOffline({
+        sourceMap: sequencerSourcesRef.current,
+        patterns: displayedPatternsRef.current,
+        bpm: patternBpm || 120,
+        patternBars,
+        levels: sequencerLevelsRef.current,
+        mute: sequencerMuteRef.current,
+        solo: sequencerSoloRef.current,
+        sampleRate: 44100,
+      });
+      const blob = audioBufferToWavBlob(renderedBuffer);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${baseName || "track"}-sequencer-bounce.wav`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (err) {
+      const detail = err instanceof Error ? `: ${err.message}` : "";
+      setPatternError(`No se pudo hacer bounce${detail}.`);
+    } finally {
+      setSequencerBouncing(false);
+    }
+  }, [baseName, patternBars, patternBpm, patternStatus]);
 
   const ensureSequencerBus = useCallback((audioContext) => {
     if (sequencerMasterBusRef.current?.context === audioContext) {
@@ -4961,6 +5102,25 @@ export default function Page() {
                       }}
                     >
                       EXPORT MIDI
+                    </button>
+                    <button
+                      type="button"
+                      onClick={bounceSequencerWav}
+                      disabled={sequencerBouncing || patternStatus !== "done"}
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.25)",
+                        color: sequencerBouncing ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.78)",
+                        background: "transparent",
+                        borderRadius: 999,
+                        fontSize: 10,
+                        letterSpacing: 1,
+                        padding: "4px 10px",
+                        cursor: sequencerBouncing ? "progress" : "pointer",
+                        fontFamily: "'Space Mono', monospace",
+                      }}
+                      title="Renderiza el patrón completo como archivo WAV (sin grabar en tiempo real)"
+                    >
+                      {sequencerBouncing ? "BOUNCING…" : "BOUNCE WAV"}
                     </button>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
                       {[
