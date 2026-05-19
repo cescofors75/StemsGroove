@@ -1000,6 +1000,47 @@ function grooveExportCSV(map) {
   grooveDownload("groove_template.csv", rows.join("\n"), "text/csv");
 }
 
+// Emits a MIDI file where each detected hit lands at its measured deviated position.
+// Drop into Logic/Ableton/Cubase to use as a quantize/groove template — the DAW reads
+// the timing offsets from the notes themselves.
+function grooveBuildTemplateMidi({ map, bpm, subdivision }) {
+  const safeBpm = Math.max(1, bpm || 120);
+  const ppq = 480;
+  const stepsPerBeat = Math.max(1, subdivision / 4);
+  const stepTicks = ppq / stepsPerBeat;
+  const ticksPerMs = (safeBpm / 60) * ppq / 1000;
+  const events = [];
+  let lastTick = 0;
+  const trackName = "groove_template";
+  events.push(...midiVarLen(0), 0xff, 0x03, trackName.length, ...midiAscii(trackName));
+
+  const hits = [];
+  map.forEach((deviation, index) => {
+    if (deviation === null || deviation === undefined) return;
+    const tick = Math.max(0, Math.round(index * stepTicks + (deviation || 0) * ticksPerMs));
+    hits.push({ tick, step: index });
+  });
+  hits.sort((a, b) => a.tick - b.tick);
+
+  for (const hit of hits) {
+    const noteOnDelta = hit.tick - lastTick;
+    events.push(...midiVarLen(noteOnDelta), 0x90, 60, 100);
+    events.push(...midiVarLen(Math.round(stepTicks * 0.5)), 0x80, 60, 0);
+    lastTick = hit.tick + Math.round(stepTicks * 0.5);
+  }
+
+  events.push(...midiVarLen(0), 0xff, 0x2f, 0x00);
+  const trackChunk = midiChunk("MTrk", events);
+  const tempoChunk = buildMidiTempoTrack(safeBpm);
+  const header = midiChunk("MThd", [0x00, 0x01, 0x00, 0x02, (ppq >> 8) & 0xff, ppq & 0xff]);
+  return new Uint8Array([...header, ...tempoChunk, ...trackChunk]);
+}
+
+function grooveExportMidi(map, bpm, subdivision, name = "groove_template") {
+  const midi = grooveBuildTemplateMidi({ map, bpm, subdivision });
+  grooveDownload(`${name}.mid`, midi, "audio/midi");
+}
+
 function grooveDownload(filename, content, type) {
   const blob = new Blob([content], { type });
   const a = document.createElement("a");
@@ -1950,6 +1991,24 @@ function GrooveExtractor({ stemUrl, stemLabel = "STEM" }) {
                 >
                   ↓ CSV
                 </button>
+                <button
+                  type="button"
+                  onClick={() => grooveExportMidi(grooveMap, bpm, subdivision, "groove_template")}
+                  title="Plantilla de groove en MIDI: arrastra al DAW y úsala como groove quantize"
+                  style={{
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    color: "rgba(255,255,255,0.8)",
+                    borderRadius: 8,
+                    padding: "7px 14px",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontFamily: "'Space Mono', monospace",
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  ↓ MIDI groove
+                </button>
               </div>
             </>
           )}
@@ -2792,6 +2851,33 @@ function GrooveComparison({ stemUrls }) {
               }}
             >
               ↓ CSV stem activo
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                activeStem &&
+                grooveExportMidi(
+                  activeStem.map,
+                  activeStem.stats.activeBpm || bpm,
+                  subdivision,
+                  `groove_${activeStem.id || "stem"}`,
+                )
+              }
+              disabled={!activeStem}
+              title="MIDI groove template del stem activo"
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.14)",
+                color: activeStem ? GC_TEXT_SECONDARY : "rgba(255,255,255,0.32)",
+                borderRadius: 8,
+                padding: "7px 14px",
+                fontSize: 12,
+                cursor: activeStem ? "pointer" : "not-allowed",
+                fontFamily: "'Space Mono', monospace",
+                letterSpacing: 0.5,
+              }}
+            >
+              ↓ MIDI groove stem activo
             </button>
           </div>
         </div>
