@@ -289,6 +289,8 @@ async function renderSequencerOffline({
   levels,
   mute,
   solo,
+  swing = 0,
+  probability = {},
   sampleRate = 44100,
 }) {
   const OfflineCtx =
@@ -321,9 +323,11 @@ async function renderSequencerOffline({
   const shouldSkipOriginal = enabledStemKeys.length > 0 && !(soloEnabled && solo?.original);
 
   const lastByVoice = {};
+  const swingPct = Math.max(0, Math.min(66, swing || 0));
 
   for (let step = 0; step < stepCount; step += 1) {
-    const time = step * stepDur;
+    const swingShift = step % 2 === 1 ? (swingPct / 100) * stepDur : 0;
+    const time = step * stepDur + swingShift;
     for (const voiceId of keys) {
       if (voiceId === "original" && shouldSkipOriginal) continue;
       const allowed = !mute?.[voiceId] && (!soloEnabled || solo?.[voiceId]);
@@ -331,6 +335,8 @@ async function renderSequencerOffline({
       const stepValue = patterns?.[voiceId]?.[step] ?? 0;
       const threshold = voiceId === "drums" ? 0.6 : 0.04;
       if (stepValue < threshold) continue;
+      const prob = probability?.[voiceId]?.[step] ?? 100;
+      if (prob < 100 && Math.random() * 100 >= prob) continue;
 
       const source = sourceMap?.[voiceId];
       if (!source?.buffer || !source.stepDuration) continue;
@@ -2899,6 +2905,8 @@ function PatternRow({
   onToggleSolo,
   level = 85,
   onLevelChange,
+  probabilities,
+  onProbabilityCycle,
 }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "128px 1fr", gap: 12, alignItems: "center" }}>
@@ -2970,52 +2978,85 @@ function PatternRow({
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))`, gap: 4 }}>
-        {steps.map((value, index) => (
-          <div
-            key={`${label}-${index}`}
-            title={`Step ${index + 1} · intensity ${(value * 100).toFixed(0)}%`}
-            style={{
-              height: 18,
-              borderRadius: 4,
-              border: `1px solid ${
-                isPlaying && playheadStep === index
-                  ? "rgba(255,255,255,0.95)"
-                  : value >= 0.08
-                    ? `${color}88`
-                    : "rgba(255,255,255,0.12)"
-              }`,
-              background: value >= 0.08 ? `${color}${effectivelyMuted ? "22" : "55"}` : "rgba(255,255,255,0.03)",
-              boxShadow:
-                isPlaying && playheadStep === index
-                  ? `0 0 0 1px rgba(255,255,255,0.5), 0 0 10px ${color}44 inset`
-                  : value >= 0.08
-                    ? `0 0 8px ${color}33 inset`
-                    : "none",
-              opacity: effectivelyMuted ? 0.45 : 1,
-              transform: `scaleY(${0.45 + value * 0.55})`,
-              transformOrigin: "center bottom",
-              position: "relative",
-            }}
-          >
-            {value >= 0.12 && (
-              <span
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  display: "grid",
-                  placeItems: "center",
-                  fontSize: 8,
-                  color: "rgba(255,255,255,0.82)",
-                  fontFamily: "'Space Mono', monospace",
-                  pointerEvents: "none",
-                  mixBlendMode: "screen",
-                }}
-              >
-                {Math.round(value * 9)}
-              </span>
-            )}
-          </div>
-        ))}
+        {steps.map((value, index) => {
+          const prob = probabilities?.[index] ?? 100;
+          const probReduced = prob < 100;
+          const interactive = Boolean(onProbabilityCycle);
+          return (
+            <div
+              key={`${label}-${index}`}
+              title={`Step ${index + 1} · intensity ${(value * 100).toFixed(0)}%${probReduced ? ` · prob ${prob}%` : ""}\nShift+click cycle: 100→75→50→25→0`}
+              onClick={(event) => {
+                if (!interactive) return;
+                if (!event.shiftKey) return;
+                event.preventDefault();
+                onProbabilityCycle?.(index);
+              }}
+              onContextMenu={(event) => {
+                if (!interactive) return;
+                event.preventDefault();
+                onProbabilityCycle?.(index);
+              }}
+              style={{
+                height: 18,
+                borderRadius: 4,
+                border: `1px solid ${
+                  isPlaying && playheadStep === index
+                    ? "rgba(255,255,255,0.95)"
+                    : value >= 0.08
+                      ? `${color}88`
+                      : "rgba(255,255,255,0.12)"
+                }`,
+                background: value >= 0.08 ? `${color}${effectivelyMuted ? "22" : "55"}` : "rgba(255,255,255,0.03)",
+                boxShadow:
+                  isPlaying && playheadStep === index
+                    ? `0 0 0 1px rgba(255,255,255,0.5), 0 0 10px ${color}44 inset`
+                    : value >= 0.08
+                      ? `0 0 8px ${color}33 inset`
+                      : "none",
+                opacity: (effectivelyMuted ? 0.45 : 1) * (probReduced ? 0.35 + (prob / 100) * 0.65 : 1),
+                transform: `scaleY(${0.45 + value * 0.55})`,
+                transformOrigin: "center bottom",
+                position: "relative",
+                cursor: interactive ? "pointer" : "default",
+              }}
+            >
+              {value >= 0.12 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 8,
+                    color: "rgba(255,255,255,0.82)",
+                    fontFamily: "'Space Mono', monospace",
+                    pointerEvents: "none",
+                    mixBlendMode: "screen",
+                  }}
+                >
+                  {Math.round(value * 9)}
+                </span>
+              )}
+              {probReduced && value >= 0.08 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: -2,
+                    right: -2,
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: prob >= 50 ? "#f0c050" : "#e07550",
+                    boxShadow: "0 0 0 1px rgba(0,0,0,0.6)",
+                    pointerEvents: "none",
+                  }}
+                  title={`${prob}%`}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -3048,6 +3089,8 @@ export default function Page() {
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
   const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
   const [sequencerLevels, setSequencerLevels] = useState({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
+  const [sequencerSwing, setSequencerSwing] = useState(0);
+  const [sequencerProbability, setSequencerProbability] = useState({});
   const [editorDuration, setEditorDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
@@ -3080,6 +3123,8 @@ export default function Page() {
   const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
   const sequencerLevelsRef = useRef({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
   const hasSequencerSoloRef = useRef(false);
+  const sequencerSwingRef = useRef(0);
+  const sequencerProbabilityRef = useRef({});
   const trimToastTimerRef = useRef(null);
   const stemWavUrlCacheRef = useRef({});
   const [wavDownloadBusyStem, setWavDownloadBusyStem] = useState("");
@@ -3177,6 +3222,28 @@ export default function Page() {
     hasSequencerSoloRef.current = hasSequencerSolo;
   }, [hasSequencerSolo]);
 
+  useEffect(() => {
+    sequencerSwingRef.current = sequencerSwing;
+  }, [sequencerSwing]);
+
+  useEffect(() => {
+    sequencerProbabilityRef.current = sequencerProbability;
+  }, [sequencerProbability]);
+
+  const cycleStepProbability = useCallback((voiceId, stepIndex) => {
+    setSequencerProbability((prev) => {
+      const stepCount = displayedPatternsRef.current?.[voiceId]?.length || 16;
+      const current = prev[voiceId]?.length === stepCount
+        ? [...prev[voiceId]]
+        : new Array(stepCount).fill(100);
+      const order = [100, 75, 50, 25, 0];
+      const currentValue = current[stepIndex] ?? 100;
+      const nextIdx = (order.indexOf(currentValue) + 1) % order.length;
+      current[stepIndex] = order[nextIdx === -1 ? 0 : nextIdx];
+      return { ...prev, [voiceId]: current };
+    });
+  }, []);
+
   const stopSequencer = useCallback(() => {
     if (sequencerTimerRef.current) {
       clearInterval(sequencerTimerRef.current);
@@ -3266,6 +3333,8 @@ export default function Page() {
         levels: sequencerLevelsRef.current,
         mute: sequencerMuteRef.current,
         solo: sequencerSoloRef.current,
+        swing: sequencerSwingRef.current,
+        probability: sequencerProbabilityRef.current,
         sampleRate: 44100,
       });
       const blob = audioBufferToWavBlob(renderedBuffer);
@@ -3420,20 +3489,26 @@ export default function Page() {
 
       while (nextStepTime < audioContext.currentTime + lookahead) {
         const scheduledStep = nextStep;
-        const scheduledTime = nextStepTime;
+        // Apply swing: push off-beat 16ths later by swing% of step duration.
+        // Swing range 0-66%: 50% gives classic triplet shuffle, 66% pushes toward dotted-8th.
+        const swingPct = Math.max(0, Math.min(66, sequencerSwingRef.current || 0));
+        const isOffbeat = scheduledStep % 2 === 1;
+        const swingShift = isOffbeat ? (swingPct / 100) * stepDur : 0;
+        const scheduledTime = nextStepTime + swingShift;
         playheadQueueRef.current.push({ step: scheduledStep, time: scheduledTime });
+
+        const probMap = sequencerProbabilityRef.current;
 
         for (const key of keys) {
           if (key === "original" && shouldSkipOriginal) continue;
           const row = activePatterns[key];
           const stepValue = row?.[scheduledStep] ?? 0;
           const allowed = !activeMute[key] && (!soloEnabled || activeSolo[key]);
-          // Drums: only trigger on real detected onsets (pattern marks them as 1.0).
-          // Other voices: trigger on any meaningful energy.
           const threshold = key === "drums" ? 0.6 : 0.04;
-          if (allowed && stepValue >= threshold) {
-            triggerSequencerSlice(audioContext, key, scheduledStep, scheduledTime, stepValue);
-          }
+          if (!allowed || stepValue < threshold) continue;
+          const probability = probMap?.[key]?.[scheduledStep] ?? 100;
+          if (probability < 100 && Math.random() * 100 >= probability) continue;
+          triggerSequencerSlice(audioContext, key, scheduledStep, scheduledTime, stepValue);
         }
 
         nextStep = (nextStep + 1) % stepCount;
@@ -3929,6 +4004,8 @@ export default function Page() {
     setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false });
     setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false });
     setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
+    setSequencerSwing(0);
+    setSequencerProbability({});
     sequencerSourcesRef.current = {};
     stopSequencer();
     setPlaying(null);
@@ -4003,6 +4080,8 @@ export default function Page() {
     setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false });
     setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false });
     setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
+    setSequencerSwing(0);
+    setSequencerProbability({});
     sequencerSourcesRef.current = {};
     stopSequencer();
     setPlaying(null);
@@ -4031,6 +4110,8 @@ export default function Page() {
     setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false });
     setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false });
     setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
+    setSequencerSwing(0);
+    setSequencerProbability({});
     sequencerSourcesRef.current = {};
     stopSequencer();
     setStatus("processing");
@@ -5208,6 +5289,53 @@ export default function Page() {
                     >
                       {sequencerBouncing ? "BOUNCING…" : "BOUNCE WAV"}
                     </button>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        marginLeft: 4,
+                        padding: "3px 10px",
+                        border: `1px solid ${sequencerSwing > 0 ? accentColor : "rgba(255,255,255,0.18)"}`,
+                        borderRadius: 999,
+                      }}
+                      title="Empuja los 16ths offbeat más tarde para shuffle/swing. 50% ≈ shuffle de tresillos."
+                    >
+                      <span
+                        style={{
+                          fontFamily: "'Space Mono', monospace",
+                          fontSize: 10,
+                          letterSpacing: 1,
+                          color: sequencerSwing > 0 ? accentColor : "rgba(255,255,255,0.55)",
+                        }}
+                      >
+                        SWING
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={66}
+                        step={1}
+                        value={sequencerSwing}
+                        onChange={(event) => setSequencerSwing(Number(event.target.value))}
+                        style={{
+                          width: 80,
+                          accentColor: accentColor,
+                          cursor: "pointer",
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontFamily: "'Space Mono', monospace",
+                          fontSize: 10,
+                          color: "rgba(255,255,255,0.6)",
+                          minWidth: 26,
+                          textAlign: "right",
+                        }}
+                      >
+                        {sequencerSwing}%
+                      </span>
+                    </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
                       {[
                         { id: "clean", label: "CLEAN" },
@@ -5313,6 +5441,8 @@ export default function Page() {
                     onToggleSolo={() => toggleSequencerSolo("original")}
                     level={sequencerLevels.original}
                     onLevelChange={(value) => setSequencerLevel("original", value)}
+                    probabilities={sequencerProbability.original}
+                    onProbabilityCycle={(index) => cycleStepProbability("original", index)}
                   />
                 ) : null}
                 {STEMS.map((stem) =>
@@ -5331,6 +5461,8 @@ export default function Page() {
                       onToggleSolo={() => toggleSequencerSolo(stem.id)}
                       level={sequencerLevels[stem.id]}
                       onLevelChange={(value) => setSequencerLevel(stem.id, value)}
+                      probabilities={sequencerProbability[stem.id]}
+                      onProbabilityCycle={(index) => cycleStepProbability(stem.id, index)}
                     />
                   ) : null,
                 )}
