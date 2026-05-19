@@ -351,8 +351,12 @@ function detectStemOnsets(mono, sampleRate, analysisDuration) {
   const hopSize = 512;
   const maxSamples = Math.min(mono.length, Math.floor(analysisDuration * sampleRate));
   const frameCount = Math.max(1, Math.floor((maxSamples - frameSize) / hopSize));
-  const envelope = [];
+  if (frameCount < 3) {
+    return [];
+  }
 
+  // Log-compressed RMS envelope — sharpens attacks and reduces level bias.
+  const envelope = new Float32Array(frameCount);
   for (let frame = 0; frame < frameCount; frame += 1) {
     const start = frame * hopSize;
     const end = Math.min(start + frameSize, maxSamples);
@@ -360,31 +364,57 @@ function detectStemOnsets(mono, sampleRate, analysisDuration) {
     for (let i = start; i < end; i += 1) {
       sum += mono[i] * mono[i];
     }
-    envelope.push(Math.sqrt(sum / Math.max(1, end - start)));
+    envelope[frame] = Math.log1p(Math.sqrt(sum / Math.max(1, end - start)) * 24);
   }
 
-  if (envelope.length < 3) {
-    return [];
+  const novelty = new Float32Array(frameCount);
+  let sum = 0;
+  let sqSum = 0;
+  for (let i = 1; i < frameCount; i += 1) {
+    const diff = envelope[i] - envelope[i - 1];
+    const v = diff > 0 ? diff : 0;
+    novelty[i] = v;
+    sum += v;
+    sqSum += v * v;
   }
 
-  const novelty = [];
-  for (let i = 1; i < envelope.length; i += 1) {
-    novelty.push(Math.max(0, envelope[i] - envelope[i - 1]));
-  }
-
-  const avg = novelty.reduce((acc, value) => acc + value, 0) / Math.max(1, novelty.length);
-  const variance = novelty.reduce((acc, value) => acc + (value - avg) ** 2, 0) / Math.max(1, novelty.length);
+  const avg = sum / Math.max(1, frameCount - 1);
+  const variance = Math.max(0, sqSum / Math.max(1, frameCount - 1) - avg * avg);
   const stdev = Math.sqrt(variance);
-  const threshold = avg + stdev * 0.9;
-  const minGapFrames = Math.max(1, Math.round((sampleRate * 0.06) / hopSize));
+  // Slightly lower global floor; the local check below filters stragglers.
+  const globalThreshold = avg + stdev * 0.55;
+
+  // Sliding-window local mean for adaptive thresholding — recovers quiet onsets
+  // while suppressing false peaks during sustained loud passages.
+  const windowFrames = Math.max(6, Math.round((sampleRate * 0.35) / hopSize));
+  let runningSum = 0;
+  let runningCount = 0;
+  for (let i = 0; i < Math.min(windowFrames, frameCount); i += 1) {
+    runningSum += novelty[i];
+    runningCount += 1;
+  }
+
+  const minGapFrames = Math.max(1, Math.round((sampleRate * 0.055) / hopSize));
   const onsets = [];
   let lastFrame = -minGapFrames;
 
-  for (let i = 1; i < novelty.length - 1; i += 1) {
-    const isPeak = novelty[i] > novelty[i - 1] && novelty[i] >= novelty[i + 1];
-    if (!isPeak || novelty[i] < threshold || i - lastFrame < minGapFrames) {
-      continue;
+  for (let i = 1; i < frameCount - 1; i += 1) {
+    const addIdx = i + windowFrames;
+    if (addIdx < frameCount) {
+      runningSum += novelty[addIdx];
+      runningCount += 1;
     }
+    const dropIdx = i - windowFrames - 1;
+    if (dropIdx >= 0) {
+      runningSum -= novelty[dropIdx];
+      runningCount -= 1;
+    }
+    const value = novelty[i];
+    if (!(value > novelty[i - 1] && value >= novelty[i + 1])) continue;
+    if (i - lastFrame < minGapFrames) continue;
+    const localMean = runningSum / Math.max(1, runningCount);
+    if (value < globalThreshold && value < localMean * 2.2) continue;
+    if (value < localMean * 1.6) continue;
     lastFrame = i;
     onsets.push(((i + 1) * hopSize) / sampleRate);
   }
@@ -396,36 +426,49 @@ function buildStepPattern(mono, sampleRate, bpm, steps = 16, bars = 1) {
   const availableSeconds = mono.length / sampleRate;
   const { analysisDuration, stepDuration } = getPatternWindow(availableSeconds, bpm, steps, bars);
   const onsetTimes = detectStemOnsets(mono, sampleRate, analysisDuration);
-  const pattern = Array.from({ length: steps }).map(() => 0);
-  const onsetSteps = Array.from({ length: steps }).map(() => false);
+  const pattern = new Array(steps).fill(0);
+  const onsetSteps = new Array(steps).fill(false);
+  const onsetOffsets = new Array(steps).fill(0);
 
   for (let step = 0; step < steps; step += 1) {
     const start = Math.floor(step * stepDuration * sampleRate);
     const end = Math.min(mono.length, Math.floor((step + 1) * stepDuration * sampleRate));
-    let sum = 0;
+    let sumSq = 0;
     for (let i = start; i < end; i += 1) {
-      sum += mono[i] * mono[i];
+      sumSq += mono[i] * mono[i];
     }
-    pattern[step] = Math.sqrt(sum / Math.max(1, end - start));
+    pattern[step] = Math.sqrt(sumSq / Math.max(1, end - start));
   }
 
+  // Floor-snap keeps the slice playback aligned with the bin that contains the attack.
+  // For each step, remember the offset of the *earliest* onset within the bin so the
+  // sequencer can start the slice exactly at the attack rather than at the bin edge.
   for (const onset of onsetTimes) {
     if (onset < 0 || onset > analysisDuration) {
       continue;
     }
-    const stepPosition = Math.min(steps - 1, Math.max(0, onset / stepDuration));
-    const step = Math.max(0, Math.min(steps - 1, Math.floor(stepPosition + 1e-6)));
-    onsetSteps[step] = true;
+    const step = Math.max(0, Math.min(steps - 1, Math.floor(onset / stepDuration)));
+    const offsetInBin = onset - step * stepDuration;
+    if (!onsetSteps[step] || offsetInBin < onsetOffsets[step]) {
+      onsetOffsets[step] = offsetInBin;
+      onsetSteps[step] = true;
+    }
   }
 
-  const gatedPattern = pattern.map((value, index) => (onsetSteps[index] ? value : 0));
-  const maxValue = Math.max(...gatedPattern, 1e-9);
-  return gatedPattern.map((value, index) => {
-    if (!onsetSteps[index]) {
-      return 0;
+  let maxValue = 1e-9;
+  for (let i = 0; i < steps; i += 1) {
+    if (!onsetSteps[i]) {
+      pattern[i] = 0;
+    } else if (pattern[i] > maxValue) {
+      maxValue = pattern[i];
     }
-    return Math.max(0, Math.min(1, value / maxValue));
-  });
+  }
+  const result = new Array(steps);
+  for (let i = 0; i < steps; i += 1) {
+    result[i] = onsetSteps[i] ? Math.max(0, Math.min(1, pattern[i] / maxValue)) : 0;
+  }
+
+  return { pattern: result, onsetOffsets };
 }
 
 function countHits(pattern = []) {
@@ -444,7 +487,7 @@ function rotatePattern(pattern = [], shift = 0) {
 function buildEuclideanPattern(steps = 16, pulses = 4, rotation = 0) {
   const normalizedPulses = Math.max(0, Math.min(steps, pulses));
   if (normalizedPulses === 0) {
-    return Array.from({ length: steps }).map(() => 0);
+    return new Array(steps).fill(0);
   }
 
   const result = [];
@@ -512,7 +555,7 @@ function generatePatternSet(extractedPatterns, seed = 1) {
 
   const generated = {};
   const stepCount = extractedPatterns.original?.length || extractedPatterns.drums?.length || 32;
-  const sourceDrums = extractedPatterns.drums || Array.from({ length: stepCount }).map(() => 0);
+  const sourceDrums = extractedPatterns.drums || new Array(stepCount).fill(0);
   const drumHits = Math.max(3, Math.min(Math.round(stepCount * 0.45), countHits(sourceDrums) || Math.max(4, Math.round(stepCount / 4))));
   const euclidean = buildEuclideanPattern(stepCount, drumHits, seed % stepCount).map((step) => (step ? 0.85 : 0));
   const markovDrums = markovMutatePattern(sourceDrums, 100 + seed, 0.2);
@@ -2841,6 +2884,8 @@ export default function Page() {
   const sequencerSourcesRef = useRef({});
   const sequencerActiveVoicesRef = useRef({});
   const sequencerMasterBusRef = useRef(null);
+  const playheadQueueRef = useRef([]);
+  const playheadRafRef = useRef(0);
   const displayedPatternsRef = useRef({});
   const sequencerMuteRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
   const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
@@ -2948,6 +2993,11 @@ export default function Page() {
       clearInterval(sequencerTimerRef.current);
       sequencerTimerRef.current = null;
     }
+    if (playheadRafRef.current) {
+      cancelAnimationFrame(playheadRafRef.current);
+      playheadRafRef.current = 0;
+    }
+    playheadQueueRef.current = [];
     const audioContext = sequencerAudioCtxRef.current;
     const stopTime = audioContext && audioContext.state !== "closed" ? audioContext.currentTime : 0;
     for (const active of Object.values(sequencerActiveVoicesRef.current)) {
@@ -3026,7 +3076,11 @@ export default function Page() {
       return;
     }
 
-    const offset = step * sourceInfo.stepDuration;
+    // Anchor the slice to the detected onset within the bin so the attack hits exactly
+    // when the step fires, instead of after a few-ms gap.
+    const baseOffset = step * sourceInfo.stepDuration;
+    const onsetOffset = sourceInfo.onsetOffsets?.[step] ?? 0;
+    const offset = Math.max(0, Math.min(sourceInfo.buffer.duration, baseOffset + onsetOffset));
     const maxDuration = Math.max(0, sourceInfo.buffer.duration - offset);
     // Drums: short percussive slice so consecutive hits don't bleed into each other.
     const durationCap = voiceId === "drums" ? sourceInfo.stepDuration * 0.55 : sourceInfo.stepDuration;
@@ -3140,8 +3194,7 @@ export default function Page() {
       while (nextStepTime < audioContext.currentTime + lookahead) {
         const scheduledStep = nextStep;
         const scheduledTime = nextStepTime;
-        const visualDelay = Math.max(0, (scheduledTime - audioContext.currentTime) * 1000);
-        setTimeout(() => setPlayheadStep(scheduledStep), visualDelay);
+        playheadQueueRef.current.push({ step: scheduledStep, time: scheduledTime });
 
         for (const key of keys) {
           if (key === "original" && shouldSkipOriginal) continue;
@@ -3161,8 +3214,27 @@ export default function Page() {
       }
     };
 
+    const drainPlayhead = () => {
+      const ctx = sequencerAudioCtxRef.current;
+      if (!ctx || ctx.state === "closed") {
+        playheadRafRef.current = 0;
+        return;
+      }
+      const now = ctx.currentTime;
+      const queue = playheadQueueRef.current;
+      let target = -1;
+      while (queue.length && queue[0].time <= now) {
+        target = queue.shift().step;
+      }
+      if (target >= 0) {
+        setPlayheadStep(target);
+      }
+      playheadRafRef.current = requestAnimationFrame(drainPlayhead);
+    };
+
     tick();
     sequencerTimerRef.current = setInterval(tick, 25);
+    playheadRafRef.current = requestAnimationFrame(drainPlayhead);
   }, [ensureSequencerBus, patternBpm, patternStatus, sequencerPlaying, stopSequencer, triggerSequencerSlice]);
 
   useEffect(() => {
@@ -3544,33 +3616,38 @@ export default function Page() {
       const bpm = estimateBpm(originalMono, originalBuffer.sampleRate);
       const totalSteps = 16 * patternBars;
       const originalWindow = getPatternWindow(originalBuffer.duration, bpm, totalSteps, patternBars);
+      const originalPattern = buildStepPattern(originalMono, originalBuffer.sampleRate, bpm, totalSteps, patternBars);
 
-      const nextPatterns = {
-        original: buildStepPattern(originalMono, originalBuffer.sampleRate, bpm, totalSteps, patternBars),
-      };
+      const nextPatterns = { original: originalPattern.pattern };
       const sourceMap = {
         original: {
           buffer: originalBuffer,
           stepDuration: originalWindow.stepDuration,
+          onsetOffsets: originalPattern.onsetOffsets,
         },
       };
 
-      for (const stem of STEMS) {
-        const url = stemMap[stem.id];
-        if (!url) {
-          continue;
-        }
+      // Fetch + decode stems in parallel — they're independent and decoding dominates analysis time.
+      const stemTasks = STEMS
+        .filter((stem) => stemMap[stem.id])
+        .map(async (stem) => {
+          const response = await fetch(stemMap[stem.id]);
+          if (!response.ok) {
+            throw new Error(`No se pudo analizar ${stem.label}.`);
+          }
+          const stemBuffer = await decode(await response.arrayBuffer());
+          return { stem, stemBuffer };
+        });
+      const stemResults = await Promise.all(stemTasks);
 
-        const response = await fetch(url);
-        if (!response.ok) {
-          throw new Error(`No se pudo analizar ${stem.label}.`);
-        }
-        const stemBuffer = await decode(await response.arrayBuffer());
+      for (const { stem, stemBuffer } of stemResults) {
         const stemMono = mixToMono(stemBuffer);
-        nextPatterns[stem.id] = buildStepPattern(stemMono, stemBuffer.sampleRate, bpm, totalSteps, patternBars);
+        const stemPattern = buildStepPattern(stemMono, stemBuffer.sampleRate, bpm, totalSteps, patternBars);
+        nextPatterns[stem.id] = stemPattern.pattern;
         sourceMap[stem.id] = {
           buffer: stemBuffer,
           stepDuration: getPatternWindow(stemBuffer.duration, bpm, totalSteps, patternBars).stepDuration,
+          onsetOffsets: stemPattern.onsetOffsets,
         };
       }
 
