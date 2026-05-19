@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { separateTrackViaModal } from "../lib/modal-separator.js";
+import { computeFingerprint, deleteProject, loadProject, saveProject } from "../lib/project-store.js";
 
 const STEMS = [
   {
@@ -3161,6 +3162,10 @@ export default function Page() {
   const [sequencerProbability, setSequencerProbability] = useState({});
   const [sequencerChromatic, setSequencerChromatic] = useState({});
   const [sequencerNotes, setSequencerNotes] = useState({});
+  const [projectFingerprint, setProjectFingerprint] = useState("");
+  const [savedProjectMeta, setSavedProjectMeta] = useState(null);
+  const [projectSaving, setProjectSaving] = useState(false);
+  const [projectMessage, setProjectMessage] = useState("");
   const [editorDuration, setEditorDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
@@ -3449,6 +3454,139 @@ export default function Page() {
       setSequencerBouncing(false);
     }
   }, [baseName, patternBars, patternBpm, patternStatus]);
+
+  const saveCurrentProject = useCallback(async () => {
+    if (!file || !projectFingerprint) {
+      setProjectMessage("Falta el archivo o el fingerprint para guardar.");
+      return;
+    }
+    if (patternStatus !== "done") {
+      setProjectMessage("Termina el análisis antes de guardar.");
+      return;
+    }
+    setProjectSaving(true);
+    setProjectMessage("");
+    try {
+      // Refetch stem Blobs from their object URLs so they survive in IDB.
+      const stemBlobs = {};
+      for (const [stemId, url] of Object.entries(stems || {})) {
+        if (!url) continue;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`No se pudo leer el stem ${stemId}.`);
+        stemBlobs[stemId] = await response.blob();
+      }
+      await saveProject({
+        fingerprint: projectFingerprint,
+        fileName: file.name,
+        fileBlob: file,
+        bpm: patternBpm,
+        patternBars,
+        patternMode,
+        generationSeed,
+        separateMode,
+        sequencerCharacter,
+        sequencerMute,
+        sequencerSolo,
+        sequencerLevels,
+        sequencerSwing,
+        sequencerProbability,
+        sequencerChromatic,
+        sequencerNotes,
+        patterns,
+        stems: stemBlobs,
+      });
+      setProjectMessage("✓ Proyecto guardado.");
+      setSavedProjectMeta({ fingerprint: projectFingerprint, fileName: file.name, savedAt: Date.now() });
+    } catch (err) {
+      const detail = err instanceof Error ? `: ${err.message}` : "";
+      setProjectMessage(`No se pudo guardar${detail}.`);
+    } finally {
+      setProjectSaving(false);
+    }
+  }, [
+    file,
+    generationSeed,
+    patternBars,
+    patternBpm,
+    patternMode,
+    patternStatus,
+    patterns,
+    projectFingerprint,
+    separateMode,
+    sequencerCharacter,
+    sequencerChromatic,
+    sequencerLevels,
+    sequencerMute,
+    sequencerNotes,
+    sequencerProbability,
+    sequencerSolo,
+    sequencerSwing,
+    stems,
+  ]);
+
+  const restoreSavedProject = useCallback(async () => {
+    if (!savedProjectMeta?.fingerprint) return;
+    setProjectMessage("");
+    try {
+      const saved = await loadProject(savedProjectMeta.fingerprint);
+      if (!saved) {
+        setProjectMessage("El proyecto guardado ya no existe.");
+        setSavedProjectMeta(null);
+        return;
+      }
+
+      // Rebuild object URLs for stems.
+      revokeStemWavCache();
+      const stemMap = {};
+      for (const [stemId, blob] of Object.entries(saved.stems || {})) {
+        stemMap[stemId] = URL.createObjectURL(blob);
+      }
+
+      setStems(stemMap);
+      setStatus("done");
+      setProgress(100);
+      setCurrentStep("Stems restaurados");
+
+      if (saved.separateMode) setSeparateMode(saved.separateMode);
+      if (saved.sequencerCharacter) setSequencerCharacter(saved.sequencerCharacter);
+      if (saved.sequencerMute) setSequencerMute(saved.sequencerMute);
+      if (saved.sequencerSolo) setSequencerSolo(saved.sequencerSolo);
+      if (saved.sequencerLevels) setSequencerLevels(saved.sequencerLevels);
+      if (typeof saved.sequencerSwing === "number") setSequencerSwing(saved.sequencerSwing);
+      if (saved.sequencerProbability) setSequencerProbability(saved.sequencerProbability);
+      if (saved.sequencerChromatic) setSequencerChromatic(saved.sequencerChromatic);
+      if (saved.sequencerNotes) setSequencerNotes(saved.sequencerNotes);
+      if (typeof saved.patternBars === "number") setPatternBars(saved.patternBars);
+      if (saved.patternMode) setPatternMode(saved.patternMode);
+      if (typeof saved.generationSeed === "number") setGenerationSeed(saved.generationSeed);
+
+      // Rebuild patterns + sequencerSourcesRef by re-running analysis on the saved
+      // stems. Cheap (a few seconds) and avoids storing AudioBuffers.
+      const sourceFile = saved.fileBlob
+        ? new File([saved.fileBlob], saved.fileName || "track.audio", { type: saved.fileBlob.type })
+        : file;
+      if (sourceFile) {
+        await createPatterns(sourceFile, stemMap, {
+          barsOverride: typeof saved.patternBars === "number" ? saved.patternBars : undefined,
+        });
+      }
+      setProjectMessage("✓ Proyecto restaurado.");
+    } catch (err) {
+      const detail = err instanceof Error ? `: ${err.message}` : "";
+      setProjectMessage(`No se pudo restaurar${detail}.`);
+    }
+  }, [file, revokeStemWavCache, savedProjectMeta]);
+
+  const discardSavedProject = useCallback(async () => {
+    if (!savedProjectMeta?.fingerprint) return;
+    try {
+      await deleteProject(savedProjectMeta.fingerprint);
+      setSavedProjectMeta(null);
+      setProjectMessage("Proyecto guardado eliminado.");
+    } catch {
+      setProjectMessage("No se pudo eliminar el proyecto guardado.");
+    }
+  }, [savedProjectMeta]);
 
   const ensureSequencerBus = useCallback((audioContext) => {
     if (sequencerMasterBusRef.current?.context === audioContext) {
@@ -4002,10 +4140,12 @@ export default function Page() {
     }
   };
 
-  const createPatterns = async (sourceFile, stemMap) => {
+  const createPatterns = async (sourceFile, stemMap, options = {}) => {
     if (!sourceFile) {
       return;
     }
+
+    const bars = Math.max(1, options.barsOverride ?? patternBars);
 
     setPatternStatus("processing");
     setPatternError("");
@@ -4028,9 +4168,9 @@ export default function Page() {
       const originalBuffer = await decode(await sourceFile.arrayBuffer());
       const originalMono = mixToMono(originalBuffer);
       const bpm = estimateBpm(originalMono, originalBuffer.sampleRate);
-      const totalSteps = 16 * patternBars;
-      const originalWindow = getPatternWindow(originalBuffer.duration, bpm, totalSteps, patternBars);
-      const originalPattern = buildStepPattern(originalMono, originalBuffer.sampleRate, bpm, totalSteps, patternBars);
+      const totalSteps = 16 * bars;
+      const originalWindow = getPatternWindow(originalBuffer.duration, bpm, totalSteps, bars);
+      const originalPattern = buildStepPattern(originalMono, originalBuffer.sampleRate, bpm, totalSteps, bars);
 
       const nextPatterns = { original: originalPattern.pattern };
       const sourceMap = {
@@ -4056,11 +4196,11 @@ export default function Page() {
 
       for (const { stem, stemBuffer } of stemResults) {
         const stemMono = mixToMono(stemBuffer);
-        const stemPattern = buildStepPattern(stemMono, stemBuffer.sampleRate, bpm, totalSteps, patternBars);
+        const stemPattern = buildStepPattern(stemMono, stemBuffer.sampleRate, bpm, totalSteps, bars);
         nextPatterns[stem.id] = stemPattern.pattern;
         sourceMap[stem.id] = {
           buffer: stemBuffer,
-          stepDuration: getPatternWindow(stemBuffer.duration, bpm, totalSteps, patternBars).stepDuration,
+          stepDuration: getPatternWindow(stemBuffer.duration, bpm, totalSteps, bars).stepDuration,
           onsetOffsets: stemPattern.onsetOffsets,
         };
       }
@@ -4120,6 +4260,9 @@ export default function Page() {
     setSequencerProbability({});
     setSequencerChromatic({});
     setSequencerNotes({});
+    setProjectFingerprint("");
+    setSavedProjectMeta(null);
+    setProjectMessage("");
     sequencerSourcesRef.current = {};
     stopSequencer();
     setPlaying(null);
@@ -4129,6 +4272,22 @@ export default function Page() {
       audioRef.current.src = "";
       currentAudioSourceRef.current = { id: null, url: "" };
     }
+
+    // Compute the fingerprint asynchronously and check IndexedDB for a saved
+    // project of this file. If found, surface it so the user can skip demix.
+    (async () => {
+      try {
+        const fp = await computeFingerprint(incoming);
+        if (!fp) return;
+        setProjectFingerprint(fp);
+        const saved = await loadProject(fp);
+        if (saved) {
+          setSavedProjectMeta(saved);
+        }
+      } catch {
+        // Fingerprint/IDB failure shouldn't break the upload flow.
+      }
+    })();
 
     loadEditorBuffer(incoming)
       .catch((loadError) => {
@@ -5245,6 +5404,68 @@ export default function Page() {
           ))}
         </div>
 
+        {file && savedProjectMeta && status !== "done" && (
+          <div
+            style={{
+              background: `${accentColor}14`,
+              border: `1px solid ${accentColor}55`,
+              borderRadius: 14,
+              padding: "12px 16px",
+              marginBottom: 16,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+              justifyContent: "space-between",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: accentColor, letterSpacing: 1.5 }}>
+                PROYECTO GUARDADO
+              </div>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.82)" }}>
+                Encontramos un proyecto previo para este archivo. Restaura para saltar la separación.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={restoreSavedProject}
+                style={{
+                  border: `1px solid ${accentColor}`,
+                  background: `${accentColor}22`,
+                  color: accentColor,
+                  borderRadius: 999,
+                  fontSize: 11,
+                  letterSpacing: 1,
+                  padding: "5px 12px",
+                  cursor: "pointer",
+                  fontFamily: "'Space Mono', monospace",
+                }}
+              >
+                RESTAURAR
+              </button>
+              <button
+                type="button"
+                onClick={discardSavedProject}
+                style={{
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  background: "transparent",
+                  color: "rgba(255,255,255,0.62)",
+                  borderRadius: 999,
+                  fontSize: 11,
+                  letterSpacing: 1,
+                  padding: "5px 12px",
+                  cursor: "pointer",
+                  fontFamily: "'Space Mono', monospace",
+                }}
+              >
+                DESCARTAR
+              </button>
+            </div>
+          </div>
+        )}
+
         {file && (
           <div
             style={{
@@ -5407,6 +5628,25 @@ export default function Page() {
                     >
                       {sequencerBouncing ? "BOUNCING…" : "BOUNCE WAV"}
                     </button>
+                    <button
+                      type="button"
+                      onClick={saveCurrentProject}
+                      disabled={projectSaving || patternStatus !== "done"}
+                      title="Guarda stems + estado del sequencer en IndexedDB. Al reabrir el archivo se restaura sin re-demixar."
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.25)",
+                        color: projectSaving ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.78)",
+                        background: "transparent",
+                        borderRadius: 999,
+                        fontSize: 10,
+                        letterSpacing: 1,
+                        padding: "4px 10px",
+                        cursor: projectSaving ? "progress" : "pointer",
+                        fontFamily: "'Space Mono', monospace",
+                      }}
+                    >
+                      {projectSaving ? "SAVING…" : "SAVE PROJECT"}
+                    </button>
                     <div
                       style={{
                         display: "flex",
@@ -5545,6 +5785,19 @@ export default function Page() {
                 >
                   {sequencerMixStatus.text}
                 </div>
+                {projectMessage && (
+                  <div
+                    style={{
+                      fontSize: 10,
+                      letterSpacing: 0.5,
+                      color: projectMessage.startsWith("✓") ? "rgba(120,210,140,0.9)" : "rgba(232,170,71,0.88)",
+                      marginBottom: 6,
+                      fontFamily: "'Space Mono', monospace",
+                    }}
+                  >
+                    {projectMessage}
+                  </div>
+                )}
                 {displayedPatterns.original ? (
                   <PatternRow
                     label="ORIGINAL"
