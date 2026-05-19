@@ -291,6 +291,8 @@ async function renderSequencerOffline({
   solo,
   swing = 0,
   probability = {},
+  chromatic = {},
+  notes = {},
   sampleRate = 44100,
 }) {
   const OfflineCtx =
@@ -338,6 +340,10 @@ async function renderSequencerOffline({
       const prob = probability?.[voiceId]?.[step] ?? 100;
       if (prob < 100 && Math.random() * 100 >= prob) continue;
 
+      const isChromatic = chromatic?.[voiceId] === true;
+      const note = isChromatic ? (notes?.[voiceId]?.[step] ?? 60) : 60;
+      const playbackRate = isChromatic ? Math.pow(2, (note - 60) / 12) : 1;
+
       const source = sourceMap?.[voiceId];
       if (!source?.buffer || !source.stepDuration) continue;
 
@@ -345,8 +351,12 @@ async function renderSequencerOffline({
       const onsetOffset = source.onsetOffsets?.[step] ?? 0;
       const offset = Math.max(0, Math.min(source.buffer.duration, baseOffset + onsetOffset));
       const maxDuration = Math.max(0, source.buffer.duration - offset);
-      const durationCap = voiceId === "drums" ? source.stepDuration * 0.55 : source.stepDuration;
-      const duration = Math.min(durationCap, maxDuration);
+      const durationCap = isChromatic
+        ? source.stepDuration
+        : voiceId === "drums"
+          ? source.stepDuration * 0.55
+          : source.stepDuration;
+      const duration = Math.min(durationCap, maxDuration / playbackRate);
       if (duration < 0.02) continue;
 
       const prev = lastByVoice[voiceId];
@@ -369,6 +379,7 @@ async function renderSequencerOffline({
 
       const src = ctx.createBufferSource();
       src.buffer = source.buffer;
+      src.playbackRate.value = playbackRate;
       const gain = ctx.createGain();
       const attack = 0.005;
       const release = Math.min(0.02, duration * 0.25);
@@ -1090,7 +1101,7 @@ function midiChunk(id, data) {
   ];
 }
 
-function buildMidiTrack(trackName, channel, note, steps, bpm, level = 100) {
+function buildMidiTrack(trackName, channel, note, steps, bpm, level = 100, perStepNotes = null) {
   const ppq = 480;
   const stepTicks = ppq / 4;
   const noteLength = Math.max(24, Math.round(stepTicks * 0.72));
@@ -1109,8 +1120,9 @@ function buildMidiTrack(trackName, channel, note, steps, bpm, level = 100) {
     }
     const tick = index * stepTicks;
     const velocity = Math.max(1, Math.min(127, Math.round(stepValue * (level / 100) * 127)));
-    events.push(...midiVarLen(tick - lastTick), 0x90 | (channel & 0x0f), note, velocity);
-    events.push(...midiVarLen(noteLength), 0x80 | (channel & 0x0f), note, 0x00);
+    const stepNote = Math.max(0, Math.min(127, Math.round(perStepNotes?.[index] ?? note)));
+    events.push(...midiVarLen(tick - lastTick), 0x90 | (channel & 0x0f), stepNote, velocity);
+    events.push(...midiVarLen(noteLength), 0x80 | (channel & 0x0f), stepNote, 0x00);
     lastTick = tick + noteLength;
   });
 
@@ -1136,7 +1148,7 @@ function buildSequencerMidiFile({ bpm = 120, tracks = [] }) {
   const header = midiChunk("MThd", [0x00, 0x01, 0x00, tracks.length + 1, 0x01, 0xe0]);
   const chunks = [header, buildMidiTempoTrack(bpm)];
   tracks.forEach((track) => {
-    chunks.push(buildMidiTrack(track.id, track.channel, track.note, track.steps, bpm, track.level));
+    chunks.push(buildMidiTrack(track.id, track.channel, track.note, track.steps, bpm, track.level, track.notes));
   });
   return new Uint8Array(chunks.flat());
 }
@@ -2892,6 +2904,13 @@ function GrooveComparison({ stemUrls }) {
   );
 }
 
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+function midiNoteName(midi) {
+  if (!Number.isFinite(midi)) return "C4";
+  const n = Math.max(0, Math.min(127, Math.round(midi)));
+  return `${NOTE_NAMES[n % 12]}${Math.floor(n / 12) - 1}`;
+}
+
 function PatternRow({
   label,
   color,
@@ -2907,6 +2926,10 @@ function PatternRow({
   onLevelChange,
   probabilities,
   onProbabilityCycle,
+  chromatic = false,
+  notes,
+  onToggleChromatic,
+  onStepNoteAdjust,
 }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "128px 1fr", gap: 12, alignItems: "center" }}>
@@ -2964,6 +2987,25 @@ function PatternRow({
           >
             S
           </button>
+          {onToggleChromatic && (
+            <button
+              type="button"
+              onClick={onToggleChromatic}
+              title={chromatic ? "Modo cromático ON: rueda del ratón sobre cada paso para cambiar la nota" : "Activar modo cromático: cada paso reproduce el slice a un pitch distinto"}
+              style={{
+                border: `1px solid ${chromatic ? color : "rgba(255,255,255,0.18)"}`,
+                background: chromatic ? `${color}22` : "transparent",
+                color: chromatic ? color : "rgba(255,255,255,0.62)",
+                borderRadius: 999,
+                padding: "3px 8px",
+                fontSize: 9,
+                cursor: "pointer",
+                fontFamily: "'Space Mono', monospace",
+              }}
+            >
+              Cr
+            </button>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", fontFamily: "'Space Mono', monospace" }}>VOL</span>
@@ -2982,10 +3024,12 @@ function PatternRow({
           const prob = probabilities?.[index] ?? 100;
           const probReduced = prob < 100;
           const interactive = Boolean(onProbabilityCycle);
+          const note = chromatic ? (notes?.[index] ?? 60) : null;
+          const noteOffset = chromatic ? (note - 60) : 0;
           return (
             <div
               key={`${label}-${index}`}
-              title={`Step ${index + 1} · intensity ${(value * 100).toFixed(0)}%${probReduced ? ` · prob ${prob}%` : ""}\nShift+click cycle: 100→75→50→25→0`}
+              title={`Step ${index + 1} · intensity ${(value * 100).toFixed(0)}%${probReduced ? ` · prob ${prob}%` : ""}${chromatic ? ` · nota ${midiNoteName(note)}` : ""}\nShift+click: probability cycle${chromatic ? "\nWheel: ±1 semitono (Shift+wheel: ±octava)" : ""}`}
               onClick={(event) => {
                 if (!interactive) return;
                 if (!event.shiftKey) return;
@@ -2997,8 +3041,15 @@ function PatternRow({
                 event.preventDefault();
                 onProbabilityCycle?.(index);
               }}
+              onWheel={(event) => {
+                if (!chromatic || !onStepNoteAdjust) return;
+                event.preventDefault();
+                const direction = event.deltaY < 0 ? 1 : -1;
+                const delta = event.shiftKey ? 12 * direction : direction;
+                onStepNoteAdjust(index, delta);
+              }}
               style={{
-                height: 18,
+                height: chromatic ? 26 : 18,
                 borderRadius: 4,
                 border: `1px solid ${
                   isPlaying && playheadStep === index
@@ -3021,7 +3072,7 @@ function PatternRow({
                 cursor: interactive ? "pointer" : "default",
               }}
             >
-              {value >= 0.12 && (
+              {value >= 0.12 && !chromatic && (
                 <span
                   style={{
                     position: "absolute",
@@ -3036,6 +3087,23 @@ function PatternRow({
                   }}
                 >
                   {Math.round(value * 9)}
+                </span>
+              )}
+              {chromatic && value >= 0.08 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 9,
+                    color: noteOffset === 0 ? "rgba(255,255,255,0.82)" : noteOffset > 0 ? "#bce4ff" : "#ffcfa8",
+                    fontFamily: "'Space Mono', monospace",
+                    pointerEvents: "none",
+                    mixBlendMode: "screen",
+                  }}
+                >
+                  {midiNoteName(note)}
                 </span>
               )}
               {probReduced && value >= 0.08 && (
@@ -3091,6 +3159,8 @@ export default function Page() {
   const [sequencerLevels, setSequencerLevels] = useState({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
   const [sequencerSwing, setSequencerSwing] = useState(0);
   const [sequencerProbability, setSequencerProbability] = useState({});
+  const [sequencerChromatic, setSequencerChromatic] = useState({});
+  const [sequencerNotes, setSequencerNotes] = useState({});
   const [editorDuration, setEditorDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
@@ -3125,6 +3195,8 @@ export default function Page() {
   const hasSequencerSoloRef = useRef(false);
   const sequencerSwingRef = useRef(0);
   const sequencerProbabilityRef = useRef({});
+  const sequencerChromaticRef = useRef({});
+  const sequencerNotesRef = useRef({});
   const trimToastTimerRef = useRef(null);
   const stemWavUrlCacheRef = useRef({});
   const [wavDownloadBusyStem, setWavDownloadBusyStem] = useState("");
@@ -3230,6 +3302,27 @@ export default function Page() {
     sequencerProbabilityRef.current = sequencerProbability;
   }, [sequencerProbability]);
 
+  useEffect(() => {
+    sequencerChromaticRef.current = sequencerChromatic;
+  }, [sequencerChromatic]);
+
+  useEffect(() => {
+    sequencerNotesRef.current = sequencerNotes;
+  }, [sequencerNotes]);
+
+  const toggleVoiceChromatic = useCallback((voiceId) => {
+    setSequencerChromatic((prev) => ({ ...prev, [voiceId]: !prev[voiceId] }));
+  }, []);
+
+  const adjustStepNote = useCallback((voiceId, stepIndex, delta) => {
+    setSequencerNotes((prev) => {
+      const stepCount = displayedPatternsRef.current?.[voiceId]?.length || 16;
+      const base = prev[voiceId]?.length === stepCount ? [...prev[voiceId]] : new Array(stepCount).fill(60);
+      base[stepIndex] = Math.max(24, Math.min(96, (base[stepIndex] ?? 60) + delta));
+      return { ...prev, [voiceId]: base };
+    });
+  }, []);
+
   const cycleStepProbability = useCallback((voiceId, stepIndex) => {
     setSequencerProbability((prev) => {
       const stepCount = displayedPatternsRef.current?.[voiceId]?.length || 16;
@@ -3302,6 +3395,7 @@ export default function Page() {
         channel,
         steps: displayedPatterns[id],
         level: sequencerLevels[id] ?? 100,
+        notes: sequencerChromatic[id] ? sequencerNotes[id] : null,
       }));
 
     if (!tracks.length) {
@@ -3312,7 +3406,7 @@ export default function Page() {
 
     const midi = buildSequencerMidiFile({ bpm: patternBpm || 120, tracks });
     grooveDownload(`${baseName || "track"}-sequencer.mid`, midi, "audio/midi");
-  }, [baseName, displayedPatterns, hasSequencerSolo, patternBpm, patternStatus, sequencerLevels, sequencerMute, sequencerSolo]);
+  }, [baseName, displayedPatterns, hasSequencerSolo, patternBpm, patternStatus, sequencerChromatic, sequencerLevels, sequencerMute, sequencerNotes, sequencerSolo]);
 
   const bounceSequencerWav = useCallback(async () => {
     if (patternStatus !== "done") {
@@ -3335,6 +3429,8 @@ export default function Page() {
         solo: sequencerSoloRef.current,
         swing: sequencerSwingRef.current,
         probability: sequencerProbabilityRef.current,
+        chromatic: sequencerChromaticRef.current,
+        notes: sequencerNotesRef.current,
         sampleRate: 44100,
       });
       const blob = audioBufferToWavBlob(renderedBuffer);
@@ -3366,11 +3462,14 @@ export default function Page() {
     return bus;
   }, []);
 
-  const triggerSequencerSlice = useCallback((audioContext, voiceId, step, time, intensity = 1) => {
+  const triggerSequencerSlice = useCallback((audioContext, voiceId, step, time, intensity = 1, options = {}) => {
     const sourceInfo = sequencerSourcesRef.current[voiceId];
     if (!sourceInfo?.buffer || !sourceInfo.stepDuration) {
       return;
     }
+
+    const playbackRate = Math.max(0.1, Math.min(8, options.playbackRate || 1));
+    const chromatic = Boolean(options.chromatic);
 
     // Anchor the slice to the detected onset within the bin so the attack hits exactly
     // when the step fires, instead of after a few-ms gap.
@@ -3378,9 +3477,14 @@ export default function Page() {
     const onsetOffset = sourceInfo.onsetOffsets?.[step] ?? 0;
     const offset = Math.max(0, Math.min(sourceInfo.buffer.duration, baseOffset + onsetOffset));
     const maxDuration = Math.max(0, sourceInfo.buffer.duration - offset);
-    // Drums: short percussive slice so consecutive hits don't bleed into each other.
-    const durationCap = voiceId === "drums" ? sourceInfo.stepDuration * 0.55 : sourceInfo.stepDuration;
-    const duration = Math.min(durationCap, maxDuration);
+    // In chromatic mode let notes sustain a full step (instrument feel).
+    // Otherwise drums get a short percussive slice; other voices full step.
+    const baseDurationCap = chromatic
+      ? sourceInfo.stepDuration
+      : voiceId === "drums"
+        ? sourceInfo.stepDuration * 0.55
+        : sourceInfo.stepDuration;
+    const duration = Math.min(baseDurationCap, maxDuration / playbackRate);
     if (duration < 0.02) {
       return;
     }
@@ -3407,7 +3511,7 @@ export default function Page() {
 
     const source = audioContext.createBufferSource();
     source.buffer = sourceInfo.buffer;
-    source.playbackRate.value = 1;
+    source.playbackRate.value = playbackRate;
 
     const gain = audioContext.createGain();
     const attack = 0.005;
@@ -3498,6 +3602,8 @@ export default function Page() {
         playheadQueueRef.current.push({ step: scheduledStep, time: scheduledTime });
 
         const probMap = sequencerProbabilityRef.current;
+        const chromMap = sequencerChromaticRef.current;
+        const notesMap = sequencerNotesRef.current;
 
         for (const key of keys) {
           if (key === "original" && shouldSkipOriginal) continue;
@@ -3508,7 +3614,13 @@ export default function Page() {
           if (!allowed || stepValue < threshold) continue;
           const probability = probMap?.[key]?.[scheduledStep] ?? 100;
           if (probability < 100 && Math.random() * 100 >= probability) continue;
-          triggerSequencerSlice(audioContext, key, scheduledStep, scheduledTime, stepValue);
+          const chromatic = chromMap?.[key] === true;
+          const note = chromatic ? (notesMap?.[key]?.[scheduledStep] ?? 60) : 60;
+          const playbackRate = chromatic ? Math.pow(2, (note - 60) / 12) : 1;
+          triggerSequencerSlice(audioContext, key, scheduledStep, scheduledTime, stepValue, {
+            playbackRate,
+            chromatic,
+          });
         }
 
         nextStep = (nextStep + 1) % stepCount;
@@ -4006,6 +4118,8 @@ export default function Page() {
     setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
     setSequencerSwing(0);
     setSequencerProbability({});
+    setSequencerChromatic({});
+    setSequencerNotes({});
     sequencerSourcesRef.current = {};
     stopSequencer();
     setPlaying(null);
@@ -4082,6 +4196,8 @@ export default function Page() {
     setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
     setSequencerSwing(0);
     setSequencerProbability({});
+    setSequencerChromatic({});
+    setSequencerNotes({});
     sequencerSourcesRef.current = {};
     stopSequencer();
     setPlaying(null);
@@ -4112,6 +4228,8 @@ export default function Page() {
     setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
     setSequencerSwing(0);
     setSequencerProbability({});
+    setSequencerChromatic({});
+    setSequencerNotes({});
     sequencerSourcesRef.current = {};
     stopSequencer();
     setStatus("processing");
@@ -5443,6 +5561,10 @@ export default function Page() {
                     onLevelChange={(value) => setSequencerLevel("original", value)}
                     probabilities={sequencerProbability.original}
                     onProbabilityCycle={(index) => cycleStepProbability("original", index)}
+                    chromatic={Boolean(sequencerChromatic.original)}
+                    notes={sequencerNotes.original}
+                    onToggleChromatic={() => toggleVoiceChromatic("original")}
+                    onStepNoteAdjust={(index, delta) => adjustStepNote("original", index, delta)}
                   />
                 ) : null}
                 {STEMS.map((stem) =>
@@ -5463,6 +5585,10 @@ export default function Page() {
                       onLevelChange={(value) => setSequencerLevel(stem.id, value)}
                       probabilities={sequencerProbability[stem.id]}
                       onProbabilityCycle={(index) => cycleStepProbability(stem.id, index)}
+                      chromatic={Boolean(sequencerChromatic[stem.id])}
+                      notes={sequencerNotes[stem.id]}
+                      onToggleChromatic={() => toggleVoiceChromatic(stem.id)}
+                      onStepNoteAdjust={(index, delta) => adjustStepNote(stem.id, index, delta)}
                     />
                   ) : null,
                 )}
