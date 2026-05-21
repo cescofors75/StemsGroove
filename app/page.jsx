@@ -40,6 +40,24 @@ const STEMS = [
     border: "rgba(0,158,115,0.42)",
     desc: "Guitars, synths and remaining layers",
   },
+  {
+    id: "guitar",
+    label: "GUITAR",
+    icon: "GTR",
+    color: "#f0e442",
+    bg: "rgba(240,228,66,0.1)",
+    border: "rgba(240,228,66,0.42)",
+    desc: "Electric & acoustic guitar",
+  },
+  {
+    id: "piano",
+    label: "PIANO",
+    icon: "PNO",
+    color: "#0072b2",
+    bg: "rgba(0,114,178,0.1)",
+    border: "rgba(0,114,178,0.42)",
+    desc: "Piano and keyboard layers",
+  },
 ];
 
 const ACCEPT_AUDIO = /\.(wav|mp3|flac|aiff?)$/i;
@@ -522,6 +540,8 @@ function generatePatternSet(extractedPatterns, seed = 1) {
   generated.vocals = markovMutatePattern(extractedPatterns.vocals || generated.original, 23 + seed, 0.24);
   generated.bass = markovMutatePattern(extractedPatterns.bass || generated.original, 37 + seed, 0.18);
   generated.other = markovMutatePattern(extractedPatterns.other || generated.original, 51 + seed, 0.28);
+  generated.guitar = markovMutatePattern(extractedPatterns.guitar || generated.other, 43 + seed, 0.22);
+  generated.piano = markovMutatePattern(extractedPatterns.piano || generated.vocals, 59 + seed, 0.20);
 
   return generated;
 }
@@ -998,6 +1018,8 @@ function getSequencerVoiceTone(voiceId, character = "punch") {
   if (voiceId === "bass") return { hp: 24, lp: character === "clean" ? 3000 : 2500, drive: 1.22 * profile.driveMul, pan: 0.02, attack: 0.006, release: 0.16, rateJitter: (jitterBase * 0.5) * profile.jitterMul };
   if (voiceId === "vocals") return { hp: 95, lp: character === "warm" ? 6700 : 7300, drive: 1.12 * profile.driveMul, pan: 0.12, attack: 0.008, release: 0.14, rateJitter: (jitterBase * 0.45) * profile.jitterMul };
   if (voiceId === "other") return { hp: 72, lp: character === "clean" ? 8800 : 8200, drive: 1.18 * profile.driveMul, pan: 0.16, attack: 0.006, release: 0.12, rateJitter: (jitterBase * 0.6) * profile.jitterMul };
+  if (voiceId === "guitar") return { hp: 80, lp: character === "warm" ? 8600 : 9000, drive: 1.20 * profile.driveMul, pan: -0.14, attack: 0.004, release: 0.10, rateJitter: (jitterBase * 0.5) * profile.jitterMul };
+  if (voiceId === "piano") return { hp: 55, lp: character === "clean" ? 7000 : 6500, drive: 1.10 * profile.driveMul, pan: 0.10, attack: 0.010, release: 0.18, rateJitter: (jitterBase * 0.4) * profile.jitterMul };
   return { hp: 30, lp: 11500, drive: 1.08 * profile.driveMul, pan: 0.04, attack: 0.006, release: 0.12, rateJitter: (jitterBase * 0.35) * profile.jitterMul };
 }
 
@@ -2790,6 +2812,979 @@ function PatternRow({
   );
 }
 
+// ─── Stem Mixer helpers ───────────────────────────────────────────────────────
+
+function drawMixerWaveform(canvas, mono, color) {
+  if (!canvas || !mono?.length) return;
+  const ctx2 = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, canvas.offsetWidth || 600);
+  const height = Math.max(1, canvas.offsetHeight || 72);
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx2.clearRect(0, 0, width, height);
+  const midY = height / 2;
+  const samplesPerPixel = Math.max(1, Math.floor(mono.length / width));
+
+  ctx2.fillStyle = "rgba(255,255,255,0.025)";
+  ctx2.fillRect(0, 0, width, height);
+
+  ctx2.strokeStyle = "rgba(255,255,255,0.1)";
+  ctx2.lineWidth = 0.5;
+  ctx2.beginPath();
+  ctx2.moveTo(0, midY);
+  ctx2.lineTo(width, midY);
+  ctx2.stroke();
+
+  for (let qi = 1; qi < 4; qi += 1) {
+    const qx = (width / 4) * qi;
+    ctx2.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx2.lineWidth = 0.5;
+    ctx2.setLineDash([3, 3]);
+    ctx2.beginPath();
+    ctx2.moveTo(qx, 0);
+    ctx2.lineTo(qx, height);
+    ctx2.stroke();
+    ctx2.setLineDash([]);
+  }
+
+  ctx2.fillStyle = `${color}1a`;
+  ctx2.beginPath();
+  ctx2.moveTo(0, midY);
+  for (let x = 0; x < width; x += 1) {
+    const s = x * samplesPerPixel;
+    const e = Math.min(s + samplesPerPixel, mono.length);
+    let rms = 0;
+    for (let i = s; i < e; i += 1) rms += mono[i] * mono[i];
+    const h = Math.sqrt(rms / Math.max(1, e - s)) * (height * 0.46);
+    ctx2.lineTo(x, midY - h);
+  }
+  for (let x = width - 1; x >= 0; x -= 1) {
+    const s = x * samplesPerPixel;
+    const e = Math.min(s + samplesPerPixel, mono.length);
+    let rms = 0;
+    for (let i = s; i < e; i += 1) rms += mono[i] * mono[i];
+    const h = Math.sqrt(rms / Math.max(1, e - s)) * (height * 0.46);
+    ctx2.lineTo(x, midY + h);
+  }
+  ctx2.closePath();
+  ctx2.fill();
+
+  ctx2.beginPath();
+  for (let x = 0; x < width; x += 1) {
+    const s = x * samplesPerPixel;
+    const e = Math.min(s + samplesPerPixel, mono.length);
+    let peak = 0;
+    for (let i = s; i < e; i += 1) peak = Math.max(peak, Math.abs(mono[i]));
+    const y = peak * (height * 0.46);
+    ctx2.moveTo(x + 0.5, midY - y);
+    ctx2.lineTo(x + 0.5, midY + y);
+  }
+  ctx2.strokeStyle = color;
+  ctx2.lineWidth = 1;
+  ctx2.globalAlpha = 0.8;
+  ctx2.stroke();
+  ctx2.globalAlpha = 1;
+}
+
+function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback }) {
+  const [expanded, setExpanded] = useState(true);
+  const [mixReady, setMixReady] = useState(false);
+  const [mixLoading, setMixLoading] = useState(false);
+  const [mixError, setMixError] = useState("");
+  const [mixPlaying, setMixPlaying] = useState(false);
+  const [mixTime, setMixTime] = useState(0);
+  const [mixDuration, setMixDuration] = useState(0);
+  const [trackMuted, setTrackMuted] = useState({});
+  const [trackSolo, setTrackSolo] = useState({});
+  const [trackVols, setTrackVols] = useState({});
+  const [masterVol, setMasterVol] = useState(90);
+  const [meters, setMeters] = useState({});
+  const [exportBusy, setExportBusy] = useState(false);
+
+  const mixAudioCtxRef = useRef(null);
+  const mixBuffersRef = useRef({});
+  const mixSourcesRef = useRef({});
+  const mixGainNodesRef = useRef({});
+  const mixAnalyserNodesRef = useRef({});
+  const mixMasterGainRef = useRef(null);
+  const mixStartTimeRef = useRef(0);
+  const mixPauseOffsetRef = useRef(0);
+  const mixRafRef = useRef(null);
+  const mixCanvasRefs = useRef({});
+  const mixWaveformDataRef = useRef({});
+  const mixDurationRef = useRef(0);
+  const mixMutedRef = useRef({});
+  const mixSoloRef = useRef({});
+  const mixVolsRef = useRef({});
+  const mixMasterVolRef = useRef(90);
+  const mixHasSoloRef = useRef(false);
+  const mixPlayingRef = useRef(false);
+  const mixPrevUrlsKeyRef = useRef("");
+
+  useEffect(() => { mixDurationRef.current = mixDuration; }, [mixDuration]);
+  useEffect(() => { mixMutedRef.current = trackMuted; }, [trackMuted]);
+  useEffect(() => { mixSoloRef.current = trackSolo; }, [trackSolo]);
+  useEffect(() => { mixVolsRef.current = trackVols; }, [trackVols]);
+  useEffect(() => { mixMasterVolRef.current = masterVol; }, [masterVol]);
+  useEffect(() => { mixPlayingRef.current = mixPlaying; }, [mixPlaying]);
+
+  const mixHasSolo = useMemo(() => Object.values(trackSolo).some(Boolean), [trackSolo]);
+  useEffect(() => { mixHasSoloRef.current = mixHasSolo; }, [mixHasSolo]);
+
+  const availableStems = useMemo(
+    () => stemDefs.filter((s) => stemUrls[s.id]),
+    [stemDefs, stemUrls],
+  );
+
+  useEffect(() => {
+    const m = {};
+    const s = {};
+    const v = {};
+    const mt = {};
+    availableStems.forEach((stem) => {
+      m[stem.id] = false;
+      s[stem.id] = false;
+      v[stem.id] = 85;
+      mt[stem.id] = 0;
+    });
+    setTrackMuted(m);
+    setTrackSolo(s);
+    setTrackVols(v);
+    setMeters(mt);
+  }, [availableStems]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const urlsKey = availableStems.map((s) => stemUrls[s.id]).join("|");
+    if (!urlsKey || urlsKey === mixPrevUrlsKeyRef.current) return;
+    mixPrevUrlsKeyRef.current = urlsKey;
+    setMixReady(false);
+    setMixLoading(true);
+    setMixError("");
+    setMixTime(0);
+    mixPauseOffsetRef.current = 0;
+
+    const AudioCtxCls = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtxCls) {
+      setMixError("Tu navegador no soporta Web Audio API.");
+      setMixLoading(false);
+      return;
+    }
+
+    const loadAll = async () => {
+      if (!mixAudioCtxRef.current || mixAudioCtxRef.current.state === "closed") {
+        mixAudioCtxRef.current = new AudioCtxCls();
+        mixMasterGainRef.current = null;
+        mixGainNodesRef.current = {};
+        mixAnalyserNodesRef.current = {};
+      }
+      const ctx = mixAudioCtxRef.current;
+      if (ctx.state === "suspended") await ctx.resume();
+
+      const results = await Promise.all(
+        availableStems.map(async (stem) => {
+          const res = await fetch(stemUrls[stem.id]);
+          if (!res.ok) throw new Error(`Error cargando ${stem.label}`);
+          const ab = await res.arrayBuffer();
+          const buf = await ctx.decodeAudioData(ab);
+          return [stem.id, buf];
+        }),
+      );
+
+      mixBuffersRef.current = Object.fromEntries(results);
+      results.forEach(([id, buf]) => {
+        mixWaveformDataRef.current[id] = mixToMono(buf);
+      });
+      const maxDur = Math.max(...results.map(([, buf]) => buf.duration));
+      setMixDuration(maxDur);
+      setMixReady(true);
+      setMixLoading(false);
+    };
+
+    loadAll().catch((err) => {
+      setMixError(err.message || "Error al cargar los stems.");
+      setMixLoading(false);
+    });
+  }, [expanded, availableStems, stemUrls]);
+
+  useEffect(() => {
+    if (!mixReady) return;
+    availableStems.forEach((stem) => {
+      const canvas = mixCanvasRefs.current[stem.id];
+      const mono = mixWaveformDataRef.current[stem.id];
+      if (canvas && mono) drawMixerWaveform(canvas, mono, stem.color);
+    });
+  }, [mixReady, availableStems]);
+
+  const mixStopRaf = useCallback(() => {
+    if (mixRafRef.current) {
+      cancelAnimationFrame(mixRafRef.current);
+      mixRafRef.current = null;
+    }
+  }, []);
+
+  const mixStartRaf = useCallback(() => {
+    const loop = () => {
+      const ctx = mixAudioCtxRef.current;
+      if (!ctx || ctx.state === "closed") return;
+      const elapsed = ctx.currentTime - mixStartTimeRef.current;
+      const dur = mixDurationRef.current;
+      const t = Math.min(Math.max(0, elapsed), dur);
+
+      if (t >= dur - 0.05 && dur > 0) {
+        setMixTime(0);
+        setMixPlaying(false);
+        mixPauseOffsetRef.current = 0;
+        Object.values(mixSourcesRef.current).forEach((src) => {
+          try { src.stop(); } catch { /* already ended */ }
+        });
+        mixSourcesRef.current = {};
+        return;
+      }
+
+      setMixTime(t);
+
+      const nm = {};
+      Object.entries(mixAnalyserNodesRef.current).forEach(([id, analyser]) => {
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteTimeDomainData(data);
+        let peak = 0;
+        for (let i = 0; i < data.length; i += 1) {
+          const v = Math.abs(data[i] / 128 - 1);
+          if (v > peak) peak = v;
+        }
+        nm[id] = peak;
+      });
+      setMeters(nm);
+
+      mixRafRef.current = requestAnimationFrame(loop);
+    };
+    mixRafRef.current = requestAnimationFrame(loop);
+  }, [mixStopRaf]);
+
+  const mixEnsureNodes = useCallback((ctx) => {
+    if (!mixMasterGainRef.current || mixMasterGainRef.current.context !== ctx) {
+      const mg = ctx.createGain();
+      mg.gain.value = mixMasterVolRef.current / 100;
+      mg.connect(ctx.destination);
+      mixMasterGainRef.current = mg;
+    }
+    availableStems.forEach((stem) => {
+      if (!mixGainNodesRef.current[stem.id] || mixGainNodesRef.current[stem.id].context !== ctx) {
+        const g = ctx.createGain();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        g.connect(analyser);
+        analyser.connect(mixMasterGainRef.current);
+        mixGainNodesRef.current[stem.id] = g;
+        mixAnalyserNodesRef.current[stem.id] = analyser;
+      }
+    });
+  }, [availableStems]);
+
+  const mixApplyGains = useCallback(() => {
+    const hs = mixHasSoloRef.current;
+    availableStems.forEach((stem) => {
+      const g = mixGainNodesRef.current[stem.id];
+      if (!g) return;
+      const eff = mixMutedRef.current[stem.id] || (hs && !mixSoloRef.current[stem.id]);
+      g.gain.value = eff ? 0 : (mixVolsRef.current[stem.id] ?? 85) / 100;
+    });
+    if (mixMasterGainRef.current) mixMasterGainRef.current.gain.value = mixMasterVolRef.current / 100;
+  }, [availableStems]);
+
+  const mixStopPlayback = useCallback(() => {
+    mixStopRaf();
+    const toStop = { ...mixSourcesRef.current };
+    mixSourcesRef.current = {};
+    Object.values(toStop).forEach((src) => {
+      try { src.stop(); } catch { /* already ended */ }
+    });
+    setMixPlaying(false);
+  }, [mixStopRaf]);
+
+  const mixStartPlayback = useCallback(async (offset) => {
+    if (!mixReady) return;
+    const AudioCtxCls = window.AudioContext || window.webkitAudioContext;
+    if (!mixAudioCtxRef.current || mixAudioCtxRef.current.state === "closed") {
+      mixAudioCtxRef.current = new AudioCtxCls();
+      mixMasterGainRef.current = null;
+      mixGainNodesRef.current = {};
+      mixAnalyserNodesRef.current = {};
+    }
+    const ctx = mixAudioCtxRef.current;
+    if (ctx.state === "suspended") await ctx.resume();
+
+    mixEnsureNodes(ctx);
+    mixApplyGains();
+
+    mixStartTimeRef.current = ctx.currentTime - offset;
+    mixPauseOffsetRef.current = offset;
+
+    const newSources = {};
+    availableStems.forEach((stem) => {
+      const buf = mixBuffersRef.current[stem.id];
+      if (!buf || offset >= buf.duration) return;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(mixGainNodesRef.current[stem.id]);
+      src.start(ctx.currentTime, offset);
+      newSources[stem.id] = src;
+    });
+    mixSourcesRef.current = newSources;
+    setMixPlaying(true);
+    mixStartRaf();
+  }, [availableStems, mixApplyGains, mixEnsureNodes, mixReady, mixStartRaf]);
+
+  const handleMixPlay = useCallback(async () => {
+    if (mixPlayingRef.current) {
+      const ctx = mixAudioCtxRef.current;
+      if (ctx && ctx.state !== "closed") {
+        mixPauseOffsetRef.current = clamp(ctx.currentTime - mixStartTimeRef.current, 0, mixDurationRef.current);
+      }
+      mixStopPlayback();
+      return;
+    }
+    onStopOtherPlayback?.();
+    await mixStartPlayback(mixPauseOffsetRef.current);
+  }, [mixStartPlayback, mixStopPlayback, onStopOtherPlayback]);
+
+  const handleMixStop = useCallback(() => {
+    mixStopPlayback();
+    mixPauseOffsetRef.current = 0;
+    setMixTime(0);
+  }, [mixStopPlayback]);
+
+  const handleMixSeek = useCallback((ratio) => {
+    const newTime = clamp(ratio * mixDurationRef.current, 0, mixDurationRef.current);
+    const wasPlaying = mixPlayingRef.current;
+    if (wasPlaying) {
+      mixStopRaf();
+      const toStop = { ...mixSourcesRef.current };
+      mixSourcesRef.current = {};
+      Object.values(toStop).forEach((src) => {
+        try { src.stop(); } catch { /* already ended */ }
+      });
+    }
+    mixPauseOffsetRef.current = newTime;
+    setMixTime(newTime);
+    if (wasPlaying) requestAnimationFrame(() => mixStartPlayback(newTime));
+  }, [mixStartPlayback, mixStopRaf]);
+
+  useEffect(() => { mixApplyGains(); }, [mixApplyGains, trackMuted, trackSolo, trackVols, masterVol]);
+
+  useEffect(() => () => {
+    mixStopPlayback();
+    if (mixAudioCtxRef.current && mixAudioCtxRef.current.state !== "closed") {
+      mixAudioCtxRef.current.close();
+    }
+  }, [mixStopPlayback]);
+
+  const handleMixExport = useCallback(async () => {
+    if (!mixReady || exportBusy) return;
+    setExportBusy(true);
+    try {
+      const firstBuf = Object.values(mixBuffersRef.current)[0];
+      if (!firstBuf) return;
+      const sampleRate = firstBuf.sampleRate;
+      const dur = mixDurationRef.current;
+      const hs = mixHasSoloRef.current;
+      const offline = new OfflineAudioContext(2, Math.ceil(dur * sampleRate), sampleRate);
+      const mg = offline.createGain();
+      mg.gain.value = mixMasterVolRef.current / 100;
+      mg.connect(offline.destination);
+      availableStems.forEach((stem) => {
+        const buf = mixBuffersRef.current[stem.id];
+        if (!buf) return;
+        const eff = mixMutedRef.current[stem.id] || (hs && !mixSoloRef.current[stem.id]);
+        if (eff) return;
+        const src = offline.createBufferSource();
+        src.buffer = buf;
+        const g = offline.createGain();
+        g.gain.value = (mixVolsRef.current[stem.id] ?? 85) / 100;
+        src.connect(g);
+        g.connect(mg);
+        src.start(0);
+      });
+      const rendered = await offline.startRendering();
+      const blob = audioBufferToWavBlob(rendered);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${baseName || "mix"}-stem-mix.wav`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // silently skip export error
+    } finally {
+      setExportBusy(false);
+    }
+  }, [availableStems, baseName, exportBusy, mixReady]);
+
+  const mixPlayheadPct = mixDuration > 0 ? (mixTime / mixDuration) * 100 : 0;
+
+  const fmtMixTime = (s) => {
+    if (!Number.isFinite(s) || s < 0) return "0:00.0";
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    const ds = Math.floor((s % 1) * 10);
+    return `${m}:${String(sec).padStart(2, "0")}.${ds}`;
+  };
+
+  return (
+    <div
+      style={{
+        marginBottom: 24,
+        background: "rgba(255,255,255,0.02)",
+        border: "1px solid rgba(255,255,255,0.09)",
+        borderRadius: 14,
+        overflow: "hidden",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        style={{
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          borderBottom: expanded ? "1px solid rgba(255,255,255,0.08)" : "none",
+          cursor: "pointer",
+          padding: "14px 20px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          color: "inherit",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+            {availableStems.map((s) => (
+              <div
+                key={s.id}
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: s.color,
+                  boxShadow: `0 0 7px ${s.color}99`,
+                }}
+              />
+            ))}
+          </div>
+          <span
+            style={{
+              fontFamily: "'Space Mono', monospace",
+              fontSize: 10,
+              letterSpacing: 2.8,
+              color: "rgba(255,255,255,0.88)",
+              fontWeight: 700,
+            }}
+          >
+            STEM MIXER
+          </span>
+          <span
+            style={{
+              fontFamily: "'Space Mono', monospace",
+              fontSize: 9,
+              color: "rgba(255,255,255,0.35)",
+              letterSpacing: 0.8,
+            }}
+          >
+            {availableStems.length} TRACKS · WAVEFORMS · REALTIME · WAV EXPORT
+          </span>
+        </div>
+        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
+          {expanded ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {expanded && (
+        <div style={{ padding: "18px 20px" }}>
+          {mixLoading && (
+            <div
+              style={{
+                padding: "36px 0",
+                textAlign: "center",
+                fontFamily: "'Space Mono', monospace",
+                fontSize: 11,
+                letterSpacing: 2.4,
+                color: "rgba(255,255,255,0.38)",
+              }}
+            >
+              CARGANDO STEMS EN EL MIXER…
+            </div>
+          )}
+          {mixError && (
+            <div
+              style={{
+                padding: "12px 0",
+                fontSize: 12,
+                color: "rgba(232,84,71,0.88)",
+                fontFamily: "'Space Mono', monospace",
+              }}
+            >
+              {mixError}
+            </div>
+          )}
+
+          {mixReady && (
+            <>
+              {/* ─── Transport ──────────────────────────────────────────── */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  marginBottom: 16,
+                  background: "rgba(0,0,0,0.28)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 12,
+                  padding: "12px 16px",
+                  flexWrap: "wrap",
+                }}
+              >
+                {/* Play / Pause  +  Stop */}
+                <div style={{ display: "flex", gap: 7 }}>
+                  <button
+                    type="button"
+                    onClick={handleMixPlay}
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: "50%",
+                      border: `1.5px solid ${mixPlaying ? "#e8c547" : "rgba(255,255,255,0.28)"}`,
+                      background: mixPlaying
+                        ? "linear-gradient(135deg, #e8c547, #ffd978)"
+                        : "rgba(255,255,255,0.05)",
+                      color: mixPlaying ? "#0a0a0a" : "rgba(255,255,255,0.92)",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: mixPlaying ? 11 : 16,
+                      fontFamily: "'Space Mono', monospace",
+                      fontWeight: 700,
+                      boxShadow: mixPlaying
+                        ? "0 0 22px rgba(232,197,71,0.4), 0 2px 8px rgba(0,0,0,0.4)"
+                        : "0 2px 8px rgba(0,0,0,0.3)",
+                      transition: "all 0.18s ease",
+                    }}
+                    title={mixPlaying ? "Pausar" : "Reproducir todos los stems"}
+                  >
+                    {mixPlaying ? "II" : "▶"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleMixStop}
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: "50%",
+                      border: "1.5px solid rgba(255,255,255,0.18)",
+                      background: "rgba(255,255,255,0.03)",
+                      color: "rgba(255,255,255,0.65)",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 13,
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                      transition: "all 0.18s ease",
+                    }}
+                    title="Stop y volver al inicio"
+                  >
+                    ■
+                  </button>
+                </div>
+
+                {/* Timecode */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <span
+                    style={{
+                      fontFamily: "'Space Mono', monospace",
+                      fontSize: 22,
+                      fontWeight: 700,
+                      letterSpacing: 1.5,
+                      color: mixPlaying ? "#e8c547" : "rgba(255,255,255,0.82)",
+                      minWidth: 90,
+                      textShadow: mixPlaying ? "0 0 20px rgba(232,197,71,0.45)" : "none",
+                      transition: "color 0.3s ease, text-shadow 0.3s ease",
+                    }}
+                  >
+                    {fmtMixTime(mixTime)}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: "'Space Mono', monospace",
+                      fontSize: 11,
+                      color: "rgba(255,255,255,0.28)",
+                    }}
+                  >
+                    / {fmtMixTime(mixDuration)}
+                  </span>
+                </div>
+
+                {/* Seek bar */}
+                <div
+                  role="slider"
+                  aria-valuenow={Math.round(mixPlayheadPct)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  tabIndex={0}
+                  style={{
+                    flex: 1,
+                    minWidth: 120,
+                    position: "relative",
+                    height: 8,
+                    borderRadius: 999,
+                    background: "rgba(255,255,255,0.1)",
+                    cursor: "pointer",
+                  }}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    handleMixSeek((e.clientX - rect.left) / Math.max(1, rect.width));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowRight") handleMixSeek(clamp((mixTime + 5) / mixDuration, 0, 1));
+                    if (e.key === "ArrowLeft") handleMixSeek(clamp((mixTime - 5) / mixDuration, 0, 1));
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: `${mixPlayheadPct}%`,
+                      background: "linear-gradient(90deg, rgba(232,197,71,0.9), rgba(255,217,120,0.9))",
+                      borderRadius: 999,
+                      boxShadow: "0 0 8px rgba(232,197,71,0.35)",
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "50%",
+                      left: `${mixPlayheadPct}%`,
+                      transform: "translate(-50%, -50%)",
+                      width: 16,
+                      height: 16,
+                      borderRadius: "50%",
+                      background: "#e8c547",
+                      border: "2px solid rgba(8,9,11,0.9)",
+                      boxShadow: "0 0 0 3px rgba(232,197,71,0.22), 0 2px 6px rgba(0,0,0,0.5)",
+                      opacity: mixPlayheadPct > 0 || mixPlaying ? 1 : 0,
+                      transition: "opacity 0.2s ease",
+                    }}
+                  />
+                </div>
+
+                {/* Master */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span
+                    style={{
+                      fontFamily: "'Space Mono', monospace",
+                      fontSize: 8,
+                      letterSpacing: 1,
+                      color: "rgba(255,255,255,0.38)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    MASTER
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={masterVol}
+                    onChange={(e) => setMasterVol(Number(e.target.value))}
+                    style={{ width: 76, accentColor: "#e8c547", height: "clamp(8px, 0.9vw, 12px)", cursor: "pointer" }}
+                  />
+                  <span
+                    style={{
+                      fontFamily: "'Space Mono', monospace",
+                      fontSize: 10,
+                      color: "rgba(255,255,255,0.5)",
+                      width: 28,
+                      textAlign: "right",
+                    }}
+                  >
+                    {masterVol}%
+                  </span>
+                </div>
+
+                {/* Export */}
+                <button
+                  type="button"
+                  onClick={handleMixExport}
+                  disabled={exportBusy}
+                  style={{
+                    height: 36,
+                    borderRadius: 18,
+                    border: `1.5px solid ${exportBusy ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.28)"}`,
+                    background: "rgba(255,255,255,0.04)",
+                    color: exportBusy ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.85)",
+                    cursor: exportBusy ? "progress" : "pointer",
+                    padding: "0 16px",
+                    fontSize: 10,
+                    fontFamily: "'Space Mono', monospace",
+                    letterSpacing: 1,
+                    whiteSpace: "nowrap",
+                    transition: "all 0.18s ease",
+                  }}
+                  title="Exportar la mezcla actual a WAV"
+                >
+                  {exportBusy ? "RENDERIZANDO…" : "↓ EXPORT MIX WAV"}
+                </button>
+              </div>
+
+              {/* ─── Track rows ──────────────────────────────────────────── */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
+                {availableStems.map((stem) => {
+                  const isEffMuted = trackMuted[stem.id] || (mixHasSolo && !trackSolo[stem.id]);
+                  const meterLvl = clamp(meters[stem.id] ?? 0, 0, 1);
+                  const vol = trackVols[stem.id] ?? 85;
+                  return (
+                    <div
+                      key={stem.id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "152px 1fr 164px",
+                        gap: 8,
+                        alignItems: "center",
+                        background: isEffMuted ? "rgba(255,255,255,0.015)" : stem.bg,
+                        border: `1px solid ${isEffMuted ? "rgba(255,255,255,0.06)" : stem.border}`,
+                        borderRadius: 10,
+                        padding: "8px 12px",
+                        transition: "all 0.22s ease",
+                        opacity: isEffMuted ? 0.42 : 1,
+                      }}
+                    >
+                      {/* Track label + M/S buttons */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div
+                          style={{
+                            width: 4,
+                            height: 38,
+                            borderRadius: 3,
+                            background: isEffMuted ? "rgba(255,255,255,0.1)" : stem.color,
+                            flexShrink: 0,
+                            boxShadow: isEffMuted ? "none" : `0 0 8px ${stem.color}88`,
+                            transition: "all 0.2s ease",
+                          }}
+                        />
+                        <div>
+                          <div
+                            style={{
+                              fontFamily: "'Space Mono', monospace",
+                              fontSize: 9,
+                              letterSpacing: 1.8,
+                              color: isEffMuted ? "rgba(255,255,255,0.28)" : stem.color,
+                              fontWeight: 700,
+                              marginBottom: 5,
+                            }}
+                          >
+                            {stem.label}
+                          </div>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              onClick={() => setTrackMuted((p) => ({ ...p, [stem.id]: !p[stem.id] }))}
+                              style={{
+                                width: 28,
+                                height: 18,
+                                borderRadius: 5,
+                                border: `1px solid ${trackMuted[stem.id] ? "rgba(232,84,71,0.75)" : "rgba(255,255,255,0.2)"}`,
+                                background: trackMuted[stem.id] ? "rgba(232,84,71,0.22)" : "rgba(255,255,255,0.04)",
+                                color: trackMuted[stem.id] ? "#e85447" : "rgba(255,255,255,0.45)",
+                                cursor: "pointer",
+                                fontSize: 8,
+                                fontFamily: "'Space Mono', monospace",
+                                fontWeight: 700,
+                                transition: "all 0.15s ease",
+                              }}
+                              title={trackMuted[stem.id] ? "Activar pista" : "Mutear pista"}
+                            >
+                              M
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setTrackSolo((p) => ({ ...p, [stem.id]: !p[stem.id] }))}
+                              style={{
+                                width: 28,
+                                height: 18,
+                                borderRadius: 5,
+                                border: `1px solid ${trackSolo[stem.id] ? "rgba(232,197,71,0.8)" : "rgba(255,255,255,0.2)"}`,
+                                background: trackSolo[stem.id] ? "rgba(232,197,71,0.18)" : "rgba(255,255,255,0.04)",
+                                color: trackSolo[stem.id] ? "#e8c547" : "rgba(255,255,255,0.45)",
+                                cursor: "pointer",
+                                fontSize: 8,
+                                fontFamily: "'Space Mono', monospace",
+                                fontWeight: 700,
+                                transition: "all 0.15s ease",
+                              }}
+                              title={trackSolo[stem.id] ? "Quitar solo" : "Solo esta pista"}
+                            >
+                              S
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Waveform canvas + playhead */}
+                      <div
+                        style={{
+                          position: "relative",
+                          height: 58,
+                          borderRadius: 7,
+                          overflow: "hidden",
+                          cursor: "pointer",
+                          border: "1px solid rgba(255,255,255,0.07)",
+                        }}
+                        onClick={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          handleMixSeek((e.clientX - rect.left) / Math.max(1, rect.width));
+                        }}
+                        title="Click para hacer seek"
+                      >
+                        <canvas
+                          ref={(el) => { mixCanvasRefs.current[stem.id] = el; }}
+                          style={{ width: "100%", height: "100%", display: "block" }}
+                        />
+                        {/* Played region */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            bottom: 0,
+                            left: 0,
+                            width: `${mixPlayheadPct}%`,
+                            background: `${stem.color}12`,
+                            pointerEvents: "none",
+                          }}
+                        />
+                        {/* Playhead line */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            bottom: 0,
+                            left: `${mixPlayheadPct}%`,
+                            transform: "translateX(-50%)",
+                            width: 2,
+                            background: "rgba(255,255,255,0.95)",
+                            boxShadow: "0 0 6px rgba(255,255,255,0.7)",
+                            pointerEvents: "none",
+                            opacity: mixPlayheadPct > 0 || mixPlaying ? 1 : 0,
+                            transition: "opacity 0.2s ease",
+                          }}
+                        />
+                      </div>
+
+                      {/* Volume fader + VU meter */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <div
+                            style={{
+                              fontFamily: "'Space Mono', monospace",
+                              fontSize: 8,
+                              letterSpacing: 1,
+                              color: "rgba(255,255,255,0.32)",
+                              marginBottom: 5,
+                            }}
+                          >
+                            VOL
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            value={vol}
+                            onChange={(e) => setTrackVols((p) => ({ ...p, [stem.id]: Number(e.target.value) }))}
+                            style={{
+                              width: "100%",
+                              accentColor: stem.color,
+                              height: "clamp(8px, 0.9vw, 12px)",
+                              cursor: "pointer",
+                            }}
+                          />
+                          <div
+                            style={{
+                              fontFamily: "'Space Mono', monospace",
+                              fontSize: 9,
+                              color: "rgba(255,255,255,0.38)",
+                              textAlign: "right",
+                              marginTop: 3,
+                            }}
+                          >
+                            {vol}%
+                          </div>
+                        </div>
+
+                        {/* VU meter — 12 segments */}
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column-reverse",
+                            gap: 2,
+                            width: 12,
+                            height: 54,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {Array.from({ length: 12 }).map((_, segIdx) => {
+                            const threshold = (segIdx + 1) / 12;
+                            const active = !isEffMuted && meterLvl >= threshold * 0.88;
+                            const isRed = segIdx >= 10;
+                            const isYellow = segIdx >= 7 && segIdx < 10;
+                            return (
+                              <div
+                                key={segIdx}
+                                style={{
+                                  flex: 1,
+                                  borderRadius: 2,
+                                  background: active
+                                    ? isRed ? "#e85447" : isYellow ? "#e8c547" : stem.color
+                                    : "rgba(255,255,255,0.07)",
+                                  boxShadow: active
+                                    ? isRed ? "0 0 4px rgba(232,84,71,0.5)" : `0 0 3px ${stem.color}55`
+                                    : "none",
+                                  transition: "background 0.05s ease",
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div
+                style={{
+                  fontSize: 10,
+                  color: "rgba(255,255,255,0.26)",
+                  fontFamily: "'Space Mono', monospace",
+                  letterSpacing: 0.5,
+                  textAlign: "right",
+                }}
+              >
+                Click en la onda para hacer seek · M = Mute · S = Solo · MASTER controla el nivel global
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function Page() {
   const [file, setFile] = useState(null);
   const [originalUrl, setOriginalUrl] = useState("");
@@ -2811,11 +3806,11 @@ export default function Page() {
   const [playheadStep, setPlayheadStep] = useState(-1);
   const [patternBars, setPatternBars] = useState(4);
   const [sequencerCharacter, setSequencerCharacter] = useState("punch");
-  const [separateMode, setSeparateMode] = useState("fast");
-  const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85 });
-  const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
-  const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false });
-  const [sequencerLevels, setSequencerLevels] = useState({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
+  const [separateMode, setSeparateMode] = useState("htdemucs");
+  const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85, guitar: 85, piano: 85 });
+  const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+  const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+  const [sequencerLevels, setSequencerLevels] = useState({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85, guitar: 85, piano: 80 });
   const [editorDuration, setEditorDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
@@ -2842,9 +3837,9 @@ export default function Page() {
   const sequencerActiveVoicesRef = useRef({});
   const sequencerMasterBusRef = useRef(null);
   const displayedPatternsRef = useRef({});
-  const sequencerMuteRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
-  const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false });
-  const sequencerLevelsRef = useRef({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85 });
+  const sequencerMuteRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+  const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+  const sequencerLevelsRef = useRef({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85, guitar: 85, piano: 80 });
   const hasSequencerSoloRef = useRef(false);
   const trimToastTimerRef = useRef(null);
   const stemWavUrlCacheRef = useRef({});
@@ -2864,12 +3859,7 @@ export default function Page() {
     stemWavUrlCacheRef.current = {};
   }, []);
 
-  const modeLabel =
-    separateMode === "fast"
-      ? "FAST"
-      : separateMode === "balanced"
-        ? "BALANCED"
-        : "QUALITY";
+  const modeLabel = separateMode.toUpperCase();
 
   const engineLabel = "BROWSER";
 
@@ -2898,7 +3888,7 @@ export default function Page() {
   }, [editedDuration, previewOffset]);
   const isPreviewPlaying = playing === "original-preview";
   const sequencerActiveVoices = useMemo(() => {
-    const voices = ["original", "drums", "bass", "vocals", "other"];
+    const voices = ["original", "drums", "bass", "vocals", "other", "guitar", "piano"];
     return voices.filter((voiceId) => !sequencerMute[voiceId] && (!hasSequencerSolo || sequencerSolo[voiceId]));
   }, [hasSequencerSolo, sequencerMute, sequencerSolo]);
   const sequencerMixStatus = useMemo(() => {
@@ -2913,7 +3903,7 @@ export default function Page() {
       };
     }
 
-    if (sequencerActiveVoices.length === 5) {
+    if (sequencerActiveVoices.length === 7) {
       return { text: "Todas las pistas del secuenciador estan habilitadas.", tone: "neutral" };
     }
 
@@ -2964,6 +3954,14 @@ export default function Page() {
     setPlayheadStep(-1);
   }, []);
 
+  const stopAllPlayback = useCallback(() => {
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+      setPlaying(null);
+    }
+    stopSequencer();
+  }, [stopSequencer]);
+
   const exportSequencerMidi = useCallback(() => {
     if (patternStatus !== "done") {
       return;
@@ -2976,6 +3974,8 @@ export default function Page() {
       { id: "bass", note: 40, channel: 1 },
       { id: "vocals", note: 67, channel: 2 },
       { id: "other", note: 72, channel: 3 },
+      { id: "guitar", note: 64, channel: 4 },
+      { id: "piano", note: 60, channel: 5 },
     ];
     const tracks = trackDefs
       .filter(({ id }) => {
@@ -3118,7 +4118,7 @@ export default function Page() {
     setPlayheadStep(0);
     setSequencerPlaying(true);
 
-    const keys = ["original", "drums", "bass", "vocals", "other"];
+    const keys = ["original", "drums", "bass", "vocals", "other", "guitar", "piano"];
     const stepCount = Math.max(...keys.map((key) => displayedPatternsRef.current[key]?.length || 0), 16);
 
     // Web Audio lookahead scheduler: sample-accurate timing, immune to JS jitter.
@@ -3622,9 +4622,9 @@ export default function Page() {
     setGenerationSeed(1);
     setPatternBars(4);
     setCreativeToolsVisible(false);
-    setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false });
-    setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false });
-    setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
+    setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+    setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+    setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66, guitar: 85, piano: 80 });
     sequencerSourcesRef.current = {};
     stopSequencer();
     setPlaying(null);
@@ -3696,9 +4696,9 @@ export default function Page() {
     setGenerationSeed(1);
     setPatternBars(2);
     setCreativeToolsVisible(false);
-    setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false });
-    setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false });
-    setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66 });
+    setSequencerMute({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+    setSequencerSolo({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
+    setSequencerLevels({ original: 82, drums: 85, bass: 72, vocals: 62, other: 66, guitar: 85, piano: 80 });
     sequencerSourcesRef.current = {};
     stopSequencer();
     setPlaying(null);
@@ -3749,6 +4749,7 @@ export default function Page() {
       setAnalysisFile(sourceFile);
 
       const nextStems = await separateTrackViaModal(sourceFile, {
+        model: separateMode,
         onProgress: ({ progress: nextProgress, label }) => {
           if (Number.isFinite(nextProgress)) {
             setProgress(Math.max(3, Math.min(96, Math.round(nextProgress))));
@@ -4599,9 +5600,11 @@ export default function Page() {
               <div style={{ display: "grid", gap: 10, marginBottom: 10 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {[
-                    { id: "fast", label: "FAST", hint: "mdx_extra" },
-                    { id: "balanced", label: "BAL", hint: "htdemucs" },
-                    { id: "quality", label: "HQ", hint: "htdemucs 320k" },
+                    { id: "htdemucs", label: "BASE", hint: "4 stems · Buena calidad general" },
+                    { id: "htdemucs_ft", label: "FT", hint: "4 stems · Fine-tuned, recomendado" },
+                    { id: "htdemucs_6s", label: "6S", hint: "6 stems · Guitar & Piano" },
+                    { id: "mdx_extra", label: "MDX", hint: "4 stems · Mejor para vocales" },
+                    { id: "mdx_extra_q", label: "MDX-Q", hint: "4 stems · Ligero" },
                   ].map((mode) => (
                     <button
                       key={mode.id}
@@ -4721,6 +5724,15 @@ export default function Page() {
             Estos volúmenes afectan al reproductor de stems, no al secuenciador.
           </div>
         </div>
+
+        {ready && Object.keys(stems).length > 0 && (
+          <StemMixer
+            stems={stems}
+            stemDefs={STEMS}
+            baseName={baseName}
+            onStopOtherPlayback={stopAllPlayback}
+          />
+        )}
 
         <div className="stems-grid">
           {STEMS.map((stem) => (

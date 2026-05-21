@@ -35,9 +35,16 @@ def separate(audio_b64: dict):
     from fastapi import HTTPException, Response
     from pathlib import Path
 
-    # Recibe {"audio": "<base64>", "filename": "track.mp3"}
+    # Recibe {"audio": "<base64>", "filename": "track.mp3", "model": "htdemucs"}
     if not isinstance(audio_b64, dict) or "audio" not in audio_b64:
         raise HTTPException(status_code=400, detail="Missing JSON body field: audio")
+
+    VALID_MODELS = {"htdemucs", "htdemucs_ft", "htdemucs_6s", "mdx_extra", "mdx_extra_q"}
+    model = audio_b64.get("model", "htdemucs")
+    if model not in VALID_MODELS:
+        raise HTTPException(status_code=400, detail=f"Invalid model '{model}'. Valid options: {sorted(VALID_MODELS)}")
+
+    print(f"[demucs-separator] model={model!r}  filename={audio_b64.get('filename')!r}")
 
     try:
         data = base64.b64decode(audio_b64["audio"])
@@ -59,7 +66,7 @@ def separate(audio_b64: dict):
                 "-m",
                 "demucs.separate",
                 "-n",
-                "htdemucs",
+                model,
                 "-o",
                 str(out_dir),
                 "--mp3",
@@ -74,13 +81,14 @@ def separate(audio_b64: dict):
             raise HTTPException(status_code=500, detail=f"Demucs error: {detail[:2000]}") from exc
 
         try:
-            stems_dir = next((out_dir / "htdemucs").iterdir())
+            stems_dir = next((out_dir / model).iterdir())
         except StopIteration as exc:
             raise HTTPException(status_code=500, detail="Demucs output folder not found") from exc
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
             for stem in stems_dir.iterdir():
+                print(f"[demucs-separator] adding to ZIP: {stem.name}")
                 archive.write(stem, arcname=stem.name)
 
         return Response(
