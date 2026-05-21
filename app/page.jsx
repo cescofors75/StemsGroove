@@ -2820,76 +2820,152 @@ function PatternRow({
 
 function drawMixerWaveform(canvas, mono, color) {
   if (!canvas || !mono?.length) return;
-  const ctx2 = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
-  const width = Math.max(1, canvas.offsetWidth || 600);
-  const height = Math.max(1, canvas.offsetHeight || 72);
-  canvas.width = width * dpr;
-  canvas.height = height * dpr;
-  ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx2.clearRect(0, 0, width, height);
-  const midY = height / 2;
-  const samplesPerPixel = Math.max(1, Math.floor(mono.length / width));
+  const W = Math.max(1, canvas.offsetWidth || 600);
+  const H = Math.max(1, canvas.offsetHeight || 72);
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const midY = H / 2;
+  const spp = Math.max(1, Math.floor(mono.length / W));
 
-  ctx2.fillStyle = "rgba(255,255,255,0.025)";
-  ctx2.fillRect(0, 0, width, height);
-
-  ctx2.strokeStyle = "rgba(255,255,255,0.1)";
-  ctx2.lineWidth = 0.5;
-  ctx2.beginPath();
-  ctx2.moveTo(0, midY);
-  ctx2.lineTo(width, midY);
-  ctx2.stroke();
-
-  for (let qi = 1; qi < 4; qi += 1) {
-    const qx = (width / 4) * qi;
-    ctx2.strokeStyle = "rgba(255,255,255,0.05)";
-    ctx2.lineWidth = 0.5;
-    ctx2.setLineDash([3, 3]);
-    ctx2.beginPath();
-    ctx2.moveTo(qx, 0);
-    ctx2.lineTo(qx, height);
-    ctx2.stroke();
-    ctx2.setLineDash([]);
+  // Per-pixel stats
+  const pkPos = new Float32Array(W);
+  const pkNeg = new Float32Array(W);
+  const rms   = new Float32Array(W);
+  let gPeak = 0.001;
+  for (let x = 0; x < W; x++) {
+    const s = x * spp, e = Math.min(s + spp, mono.length);
+    let mx = 0, mn = 0, acc = 0;
+    for (let i = s; i < e; i++) {
+      const v = mono[i];
+      if (v > mx) mx = v; else if (v < mn) mn = v;
+      acc += v * v;
+    }
+    pkPos[x] = mx;
+    pkNeg[x] = -mn;
+    rms[x]   = Math.sqrt(acc / Math.max(1, e - s));
+    if (mx > gPeak) gPeak = mx;
+    if (-mn > gPeak) gPeak = -mn;
   }
 
-  ctx2.fillStyle = `${color}1a`;
-  ctx2.beginPath();
-  ctx2.moveTo(0, midY);
-  for (let x = 0; x < width; x += 1) {
-    const s = x * samplesPerPixel;
-    const e = Math.min(s + samplesPerPixel, mono.length);
-    let rms = 0;
-    for (let i = s; i < e; i += 1) rms += mono[i] * mono[i];
-    const h = Math.sqrt(rms / Math.max(1, e - s)) * (height * 0.46);
-    ctx2.lineTo(x, midY - h);
-  }
-  for (let x = width - 1; x >= 0; x -= 1) {
-    const s = x * samplesPerPixel;
-    const e = Math.min(s + samplesPerPixel, mono.length);
-    let rms = 0;
-    for (let i = s; i < e; i += 1) rms += mono[i] * mono[i];
-    const h = Math.sqrt(rms / Math.max(1, e - s)) * (height * 0.46);
-    ctx2.lineTo(x, midY + h);
-  }
-  ctx2.closePath();
-  ctx2.fill();
+  // Normalize: scale so loudest peak uses 92% of half-height
+  const scale = (midY * 0.92) / gPeak;
 
-  ctx2.beginPath();
-  for (let x = 0; x < width; x += 1) {
-    const s = x * samplesPerPixel;
-    const e = Math.min(s + samplesPerPixel, mono.length);
-    let peak = 0;
-    for (let i = s; i < e; i += 1) peak = Math.max(peak, Math.abs(mono[i]));
-    const y = peak * (height * 0.46);
-    ctx2.moveTo(x + 0.5, midY - y);
-    ctx2.lineTo(x + 0.5, midY + y);
-  }
-  ctx2.strokeStyle = color;
-  ctx2.lineWidth = 1;
-  ctx2.globalAlpha = 0.8;
-  ctx2.stroke();
-  ctx2.globalAlpha = 1;
+  // ── Layer 0: subtle dark background ──
+  ctx.fillStyle = "rgba(0,0,0,0.18)";
+  ctx.fillRect(0, 0, W, H);
+
+  // Build peak shape paths once (reused below)
+  // topPath: upper edge (positive peaks), botPath: lower edge (negative peaks)
+  const topY = (x) => midY - pkPos[x] * scale;
+  const botY = (x) => midY + pkNeg[x] * scale;
+  const rmsTopY = (x) => midY - rms[x] * scale;
+  const rmsBotY = (x) => midY + rms[x] * scale;
+
+  // ── Layer 1: full-range peak fill — gradient FROM edges INWARD ──
+  // Top half clip
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, midY); ctx.clip();
+  const gTop = ctx.createLinearGradient(0, 0, 0, midY);
+  gTop.addColorStop(0,   `${color}55`);
+  gTop.addColorStop(0.6, `${color}1a`);
+  gTop.addColorStop(1,   `${color}00`);
+  ctx.fillStyle = gTop;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  for (let x = 0; x < W; x++) ctx.lineTo(x, topY(x));
+  ctx.lineTo(W, midY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // Bottom half clip (mirror, slightly dimmer)
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, midY, W, H); ctx.clip();
+  const gBot = ctx.createLinearGradient(0, midY, 0, H);
+  gBot.addColorStop(0,   `${color}00`);
+  gBot.addColorStop(0.4, `${color}18`);
+  gBot.addColorStop(1,   `${color}44`);
+  ctx.fillStyle = gBot;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  for (let x = 0; x < W; x++) ctx.lineTo(x, botY(x));
+  ctx.lineTo(W, midY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // ── Layer 2: RMS fill — bright energy core ──
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, midY); ctx.clip();
+  const gRmsTop = ctx.createLinearGradient(0, 0, 0, midY);
+  gRmsTop.addColorStop(0,   `${color}88`);
+  gRmsTop.addColorStop(0.7, `${color}2a`);
+  gRmsTop.addColorStop(1,   `${color}00`);
+  ctx.fillStyle = gRmsTop;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  for (let x = 0; x < W; x++) ctx.lineTo(x, rmsTopY(x));
+  ctx.lineTo(W, midY); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, midY, W, H); ctx.clip();
+  const gRmsBot = ctx.createLinearGradient(0, midY, 0, H);
+  gRmsBot.addColorStop(0,   `${color}00`);
+  gRmsBot.addColorStop(0.3, `${color}2a`);
+  gRmsBot.addColorStop(1,   `${color}66`);
+  ctx.fillStyle = gRmsBot;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  for (let x = 0; x < W; x++) ctx.lineTo(x, rmsBotY(x));
+  ctx.lineTo(W, midY); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // ── Layer 3: edge lines — double pass glow ──
+  // Pass 1: wide soft glow
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 10;
+  ctx.strokeStyle = `${color}66`;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, topY(0));
+  for (let x = 1; x < W; x++) ctx.lineTo(x, topY(x));
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(0, botY(0));
+  for (let x = 1; x < W; x++) ctx.lineTo(x, botY(x));
+  ctx.stroke();
+  ctx.restore();
+
+  // Pass 2: sharp bright line on top
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 3;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.globalAlpha = 0.95;
+  ctx.beginPath();
+  ctx.moveTo(0, topY(0));
+  for (let x = 1; x < W; x++) ctx.lineTo(x, topY(x));
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(0, botY(0));
+  for (let x = 1; x < W; x++) ctx.lineTo(x, botY(x));
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Layer 4: center line ──
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(0, midY); ctx.lineTo(W, midY);
+  ctx.stroke();
 }
 
 function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback }) {
@@ -3170,7 +3246,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e) => {
-      if (e.code === "Space" && e.target === document.body) {
+      if (e.code === "Space" && !(["INPUT","TEXTAREA","SELECT","BUTTON","A"].includes(e.target.tagName) || e.target.isContentEditable)) {
         e.preventDefault();
         handleMixPlay();
       }
@@ -3966,6 +4042,7 @@ export default function Page() {
   const [trimEnd, setTrimEnd] = useState(0);
   const [fadeInMs, setFadeInMs] = useState(0);
   const [fadeOutMs, setFadeOutMs] = useState(0);
+  const [paramsExpanded, setParamsExpanded] = useState(false);
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorError, setEditorError] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -5489,28 +5566,6 @@ export default function Page() {
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
-                    previewEditedMix();
-                  }}
-                  disabled={editorLoading || previewBusy}
-                  style={{
-                    background: "none",
-                    border: `1px solid ${previewBusy ? accentColor : "rgba(255,255,255,0.14)"}`,
-                    color: previewBusy ? accentColor : "rgba(255,255,255,0.75)",
-                    padding: "6px 12px",
-                    borderRadius: 8,
-                    cursor: editorLoading ? "wait" : "pointer",
-                    fontSize: 11,
-                    fontFamily: "'Space Mono', monospace",
-                    letterSpacing: 0.3,
-                    opacity: editorLoading ? 0.6 : 1,
-                  }}
-                >
-                  {previewBusy ? "RENDERING..." : "PREVIEW EDIT"}
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
                     clearFile();
                   }}
                   style={{
@@ -5647,7 +5702,22 @@ export default function Page() {
             </div>
 
             {/* ── Sliders 2×2 ── */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 24px" }}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setParamsExpanded(p => !p)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setParamsExpanded(p => !p); } }}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                cursor: "pointer", userSelect: "none",
+                padding: "6px 0",
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 9, letterSpacing: 2, color: "rgba(255,255,255,0.38)" }}>TRIM · FADE</span>
+              <span style={{ fontSize: 9, color: "rgba(255,255,255,0.28)" }}>{paramsExpanded ? "▲" : "▼"}</span>
+            </div>
+            {paramsExpanded && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 24px" }}>
               {/* TRIM IN */}
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
@@ -5719,7 +5789,7 @@ export default function Page() {
                   style={{ width: "100%" }}
                 />
               </div>
-            </div>
+            </div>}
 
             {/* ── Transport ── */}
             <div
