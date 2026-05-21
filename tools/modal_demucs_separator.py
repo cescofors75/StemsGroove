@@ -24,9 +24,10 @@ model_cache = modal.Volume.from_name("demucs-cache", create_if_missing=True)
     cpu=4.0,
     memory=8192,
     max_containers=20,
+    min_containers=1,
     volumes={"/root/.cache/torch": model_cache},
     timeout=300,
-    scaledown_window=120,
+    scaledown_window=300,
 )
 @modal.fastapi_endpoint(method="POST", docs=True)
 def separate(audio_b64: dict):
@@ -72,9 +73,8 @@ def separate(audio_b64: dict):
             "-n", model,
             "-o", str(out_dir),
             "--shifts", str(max(0, shifts)),
-            "--jobs", "4",
         ]
-        # --overlap solo aplica a modelos htdemucs (segmented processing)
+        # --overlap y --segment solo aplican a modelos htdemucs (segmented processing)
         if model.startswith("htdemucs"):
             cmd += ["--overlap", str(max(0.0, min(0.5, overlap)))]
         if not no_mp3:
