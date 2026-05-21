@@ -2979,6 +2979,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
   const [mixDuration, setMixDuration] = useState(0);
   const [trackMuted, setTrackMuted] = useState({});
   const [trackSolo, setTrackSolo] = useState({});
+  const [expandedTrack, setExpandedTrack] = useState(null);
   const [rowFlash, setRowFlash] = useState({}); // stemId → 'mute'|'solo'|'clear'|null
 
   const triggerFlash = useCallback((stemId, type, delay = 0) => {
@@ -2991,6 +2992,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
   const [masterVol, setMasterVol] = useState(90);
   const [meters, setMeters] = useState({});
   const [exportBusy, setExportBusy] = useState(false);
+  const [stemPeaks, setStemPeaks] = useState({});
 
   const mixAudioCtxRef = useRef(null);
   const mixBuffersRef = useRef({});
@@ -3083,9 +3085,20 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
       );
 
       mixBuffersRef.current = Object.fromEntries(results);
+      const peaks = {};
       results.forEach(([id, buf]) => {
-        mixWaveformDataRef.current[id] = mixToMono(buf);
+        const mono = mixToMono(buf);
+        mixWaveformDataRef.current[id] = mono;
+        let pk = 0;
+        for (let i = 0; i < mono.length; i++) {
+          const v = Math.abs(mono[i]);
+          if (v > pk) pk = v;
+        }
+        peaks[id] = pk;
       });
+      setStemPeaks(peaks);
+      // eslint-disable-next-line no-console
+      console.log("[StemMixer] stem peaks →", Object.entries(peaks).map(([k, v]) => `${k}:${v.toFixed(4)}`).join(" | "));
       const maxDur = Math.max(...results.map(([, buf]) => buf.duration));
       setMixDuration(maxDur);
       setMixReady(true);
@@ -3105,7 +3118,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
       const mono = mixWaveformDataRef.current[stem.id];
       if (canvas && mono) drawMixerWaveform(canvas, mono, stem.color);
     });
-  }, [mixReady, availableStems]);
+  }, [mixReady, availableStems, expandedTrack]);
 
   const mixStopRaf = useCallback(() => {
     if (mixRafRef.current) {
@@ -3224,6 +3237,8 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
       src.start(ctx.currentTime, offset);
       newSources[stem.id] = src;
     });
+    // eslint-disable-next-line no-console
+    console.log("[StemMixer] playback started →", Object.keys(newSources).join(", "), "| gains →", availableStems.map(s => `${s.id}:${(mixGainNodesRef.current[s.id]?.gain.value ?? "?").toFixed ? (mixGainNodesRef.current[s.id]?.gain.value ?? "?").toFixed(2) : "?"}`).join(" | "));
     mixSourcesRef.current = newSources;
     setMixPlaying(true);
     mixStartRaf();
@@ -3418,16 +3433,6 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
             }}
           >
             STEM MIXER
-          </span>
-          <span
-            style={{
-              fontFamily: "'Space Mono', monospace",
-              fontSize: 9,
-              color: "rgba(255,255,255,0.35)",
-              letterSpacing: 0.8,
-            }}
-          >
-            {availableStems.length} TRACKS · WAVEFORMS · REALTIME · WAV EXPORT
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -3792,17 +3797,36 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                           }}
                         />
                         <div>
-                          <div
-                            style={{
-                              fontFamily: "'Space Mono', monospace",
-                              fontSize: fullscreen ? 11 : 9,
-                              letterSpacing: fullscreen ? 2.5 : 1.8,
-                              color: isEffMuted ? "rgba(255,255,255,0.28)" : stem.color,
-                              fontWeight: 700,
-                              marginBottom: 5,
-                            }}
-                          >
-                            {stem.label}
+                          <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5 }}>
+                            <div
+                              style={{
+                                fontFamily: "'Space Mono', monospace",
+                                fontSize: fullscreen ? 11 : 9,
+                                letterSpacing: fullscreen ? 2.5 : 1.8,
+                                color: isEffMuted ? "rgba(255,255,255,0.28)" : stem.color,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {stem.label}
+                            </div>
+                            {stemPeaks[stem.id] !== undefined && stemPeaks[stem.id] < 0.02 && (
+                              <div
+                                style={{
+                                  fontFamily: "'Space Mono', monospace",
+                                  fontSize: 7,
+                                  letterSpacing: 0.5,
+                                  color: "rgba(255,200,80,0.7)",
+                                  border: "1px solid rgba(255,200,80,0.3)",
+                                  borderRadius: 3,
+                                  padding: "1px 3px",
+                                  lineHeight: 1.2,
+                                  flexShrink: 0,
+                                }}
+                                title={`Señal muy baja (pico: ${(stemPeaks[stem.id] * 100).toFixed(2)}%). Este instrumento puede no estar presente en la canción.`}
+                              >
+                                LOW
+                              </div>
+                            )}
                           </div>
                           <div style={{ display: "flex", gap: 4 }}>
                             <button
@@ -3864,11 +3888,12 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                       <div
                         style={{
                           position: "relative",
-                          height: fullscreen ? 80 : 58,
+                          height: expandedTrack === stem.id ? (fullscreen ? 200 : 150) : (fullscreen ? 80 : 58),
                           borderRadius: 7,
                           overflow: "hidden",
                           cursor: "pointer",
-                          border: `1px solid ${fullscreen ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.07)'}`,
+                          border: `1px solid ${expandedTrack === stem.id ? `${stem.color}55` : fullscreen ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.07)'}`,
+                          transition: "height 0.22s cubic-bezier(0.4,0,0.2,1), border-color 0.2s ease",
                         }}
                         onClick={(e) => {
                           const rect = e.currentTarget.getBoundingClientRect();
@@ -3880,6 +3905,34 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                           ref={(el) => { mixCanvasRefs.current[stem.id] = el; }}
                           style={{ width: "100%", height: "100%", display: "block" }}
                         />
+                        {/* Expand/collapse button */}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setExpandedTrack(t => t === stem.id ? null : stem.id); }}
+                          style={{
+                            position: "absolute",
+                            top: 5,
+                            right: 6,
+                            width: 18,
+                            height: 14,
+                            background: "rgba(0,0,0,0.55)",
+                            border: `1px solid ${expandedTrack === stem.id ? stem.color : 'rgba(255,255,255,0.18)'}`,
+                            borderRadius: 3,
+                            color: expandedTrack === stem.id ? stem.color : "rgba(255,255,255,0.45)",
+                            fontSize: 7,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            lineHeight: 1,
+                            padding: 0,
+                            zIndex: 2,
+                            transition: "color 0.15s, border-color 0.15s",
+                          }}
+                          title={expandedTrack === stem.id ? "Colapsar pista" : "Expandir pista"}
+                        >
+                          {expandedTrack === stem.id ? "▲" : "▼"}
+                        </button>
                         {/* Played region */}
                         <div
                           style={{
@@ -5265,18 +5318,18 @@ export default function Page() {
 
         .stems-grid {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 12px;
           margin-bottom: 18px;
         }
 
-        @media (max-width: 1120px) {
+        @media (max-width: 900px) {
           .stems-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
 
-        @media (max-width: 760px) {
+        @media (max-width: 560px) {
           .stems-grid {
             grid-template-columns: 1fr;
           }
