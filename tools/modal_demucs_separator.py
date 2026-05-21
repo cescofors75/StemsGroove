@@ -53,28 +53,43 @@ def separate(audio_b64: dict):
 
     filename = audio_b64.get("filename", "input.mp3")
 
+    segment = audio_b64.get("segment")
+    no_mp3 = bool(audio_b64.get("no_mp3", False))
+    shifts = int(audio_b64.get("shifts", 0))        # 0 = sin TTA → ~2× más rápido
+    overlap = float(audio_b64.get("overlap", 0.1))  # 0.1 = menor solapado → más rápido
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         in_path = tmp_path / filename
         in_path.write_bytes(data)
         out_dir = tmp_path / "out"
 
+        cmd = [
+            "python", "-m", "demucs.separate",
+            "-n", model,
+            "-o", str(out_dir),
+            "--shifts", str(max(0, shifts)),
+            "--overlap", str(max(0.0, min(0.5, overlap))),
+        ]
+        if not no_mp3:
+            cmd.append("--mp3")
+        if segment is not None:
+            try:
+                seg_val = int(float(segment))
+                if 1 <= seg_val <= 300:
+                    cmd += ["--segment", str(seg_val)]
+            except (ValueError, TypeError):
+                pass
+        cmd.append(str(in_path))
+
+        print(f"[demucs-separator] cmd={cmd!r}  no_mp3={no_mp3}  segment={segment}")
+
         try:
             subprocess.run(
-            [
-                "python",
-                "-m",
-                "demucs.separate",
-                "-n",
-                model,
-                "-o",
-                str(out_dir),
-                "--mp3",
-                str(in_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
             )
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or exc.stdout or "Demucs failed").strip()

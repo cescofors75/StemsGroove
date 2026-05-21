@@ -3185,7 +3185,8 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
     availableStems.forEach((stem) => {
       const g = mixGainNodesRef.current[stem.id];
       if (!g) return;
-      const eff = trackMuted[stem.id] || (hasSolo && !trackSolo[stem.id]);
+      // Solo overrides mute: a soloed stem is always audible
+      const eff = trackSolo[stem.id] ? false : (trackMuted[stem.id] || hasSolo);
       g.gain.value = eff ? 0 : (trackVols[stem.id] ?? 85) / 100;
     });
     if (mixMasterGainRef.current) mixMasterGainRef.current.gain.value = masterVol / 100;
@@ -3560,7 +3561,8 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
               {/* ─── Track rows ──────────────────────────────────────────── */}
               <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
                 {availableStems.map((stem) => {
-                  const isEffMuted = trackMuted[stem.id] || (mixHasSolo && !trackSolo[stem.id]);
+                  // Solo overrides mute: a soloed stem is always audible
+                  const isEffMuted = trackSolo[stem.id] ? false : (trackMuted[stem.id] || mixHasSolo);
                   const meterLvl = clamp(meters[stem.id] ?? 0, 0, 1);
                   const vol = trackVols[stem.id] ?? 85;
                   return (
@@ -3628,7 +3630,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                             </button>
                             <button
                               type="button"
-                              onClick={() => setTrackSolo((p) => ({ ...p, [stem.id]: !p[stem.id] }))}
+                              onClick={() => setTrackSolo((p) => { const wasOn = p[stem.id]; const reset = Object.fromEntries(Object.keys(p).map(k => [k, false])); return wasOn ? reset : { ...reset, [stem.id]: true }; })}
                               style={{
                                 width: 28,
                                 height: 18,
@@ -3822,7 +3824,7 @@ export default function Page() {
   const [playheadStep, setPlayheadStep] = useState(-1);
   const [patternBars, setPatternBars] = useState(4);
   const [sequencerCharacter, setSequencerCharacter] = useState("punch");
-  const [separateMode, setSeparateMode] = useState("htdemucs");
+  const [separateMode, setSeparateMode] = useState("mdx_extra_q");
   const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85, guitar: 85, piano: 85 });
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
   const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
