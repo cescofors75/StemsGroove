@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { separateTrackViaModal } from "../lib/modal-separator.js";
+import { getT, LOCALES } from "../lib/i18n.js";
+import { THEMES, THEME_ORDER } from "../lib/themes.js";
 
 const STEMS = [
   {
@@ -2968,7 +2970,7 @@ function drawMixerWaveform(canvas, mono, color) {
   ctx.stroke();
 }
 
-function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback }) {
+function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, accentColor = "#e8c547", t = (k) => k }) {
   const [expanded, setExpanded] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [mixReady, setMixReady] = useState(false);
@@ -4258,7 +4260,32 @@ export default function Page() {
   const stemWavUrlCacheRef = useRef({});
   const [wavDownloadBusyStem, setWavDownloadBusyStem] = useState("");
 
-  const accentColor = "#e8c547";
+  // ── Locale & Theme ─────────────────────────────────────────────────
+  const [locale, setLocale] = useState("en");
+  const [themeName, setThemeName] = useState("dark");
+
+  // Hydrate from localStorage once on mount
+  useEffect(() => {
+    const savedLocale = localStorage.getItem("sterms_locale");
+    const savedTheme = localStorage.getItem("sterms_theme");
+    if (savedLocale && LOCALES.some((l) => l.id === savedLocale)) setLocale(savedLocale);
+    if (savedTheme && THEMES[savedTheme]) setThemeName(savedTheme);
+  }, []);
+
+  // Persist to localStorage
+  useEffect(() => { localStorage.setItem("sterms_locale", locale); }, [locale]);
+  useEffect(() => { localStorage.setItem("sterms_theme", themeName); }, [themeName]);
+
+  const theme = THEMES[themeName] || THEMES.dark;
+  const accentColor = theme.accent;
+  const t = getT(locale);
+
+  // Inject theme CSS vars + body background
+  useEffect(() => {
+    document.documentElement.style.setProperty("--accent", theme.accent);
+    document.documentElement.style.setProperty("--bg", theme.bg);
+    document.body.style.background = theme.bodyGrad;
+  }, [theme]);
   const ready = status === "done";
   const processing = status === "processing";
 
@@ -5593,7 +5620,8 @@ export default function Page() {
 
       <div className="page-container">
         <div style={{ marginBottom: 32 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          {/* ── Header row: breadcrumb + lang/theme switcher ── */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
             <div
               style={{
                 width: 9,
@@ -5601,6 +5629,7 @@ export default function Page() {
                 borderRadius: "50%",
                 background: accentColor,
                 boxShadow: `0 0 14px ${accentColor}`,
+                flexShrink: 0,
               }}
             />
             <span
@@ -5610,10 +5639,60 @@ export default function Page() {
                 letterSpacing: 3.2,
                 color: "rgba(255,255,255,0.42)",
                 textTransform: "uppercase",
+                flex: 1,
               }}
             >
-              Studio Stem Rack / Next.js
+              {t("studio_label")}
             </span>
+
+            {/* Language switcher */}
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              {LOCALES.map((loc) => (
+                <button
+                  key={loc.id}
+                  type="button"
+                  onClick={() => setLocale(loc.id)}
+                  title={loc.name}
+                  style={{
+                    fontFamily: "'Space Mono', monospace",
+                    fontSize: 9,
+                    letterSpacing: 1,
+                    padding: "3px 7px",
+                    borderRadius: 5,
+                    border: `1px solid ${locale === loc.id ? accentColor : "rgba(255,255,255,0.15)"}`,
+                    background: locale === loc.id ? `${accentColor}22` : "transparent",
+                    color: locale === loc.id ? accentColor : "rgba(255,255,255,0.45)",
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {loc.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Theme swatches */}
+            <div style={{ display: "flex", gap: 5, alignItems: "center", marginLeft: 6 }}>
+              {THEME_ORDER.map((tid) => (
+                <button
+                  key={tid}
+                  type="button"
+                  onClick={() => setThemeName(tid)}
+                  title={THEMES[tid].name}
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: THEMES[tid].accent,
+                    border: `2px solid ${themeName === tid ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.18)"}`,
+                    cursor: "pointer",
+                    padding: 0,
+                    transition: "border-color 0.15s",
+                    boxShadow: themeName === tid ? `0 0 8px ${THEMES[tid].accent}` : "none",
+                  }}
+                />
+              ))}
+            </div>
           </div>
 
           <h1
@@ -5625,13 +5704,13 @@ export default function Page() {
               letterSpacing: -1,
             }}
           >
-            STEM
+            {t("heading1")}
             <br />
-            <span style={{ color: accentColor }}>SEPARATOR</span>
+            <span style={{ color: accentColor }}>{t("heading2")}</span>
           </h1>
 
           <p style={{ marginTop: 12, maxWidth: 640, color: "rgba(255,255,255,0.5)", fontSize: 14, lineHeight: 1.6 }}>
-            Upload a full mix and split it into vocals, drums, bass and other using a remote Demucs HTDemucs endpoint on Modal.
+            {t("subtitle")}
           </p>
         </div>
 
@@ -5687,9 +5766,9 @@ export default function Page() {
                 WAV
               </div>
               <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 13, color: "rgba(255,255,255,0.58)" }}>
-                DRAG YOUR AUDIO FILE HERE
+                {t("upload_hint")}
               </div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>WAV / MP3 / FLAC / AIFF</div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>{t("upload_formats")}</div>
             </>
           ) : (
             <>
@@ -5746,7 +5825,7 @@ export default function Page() {
                     letterSpacing: 0.3,
                   }}
                 >
-                  {playing === "original" ? "PAUSE MIX" : "PLAY MIX"}
+                  {playing === "original" ? t("pause_mix") : t("play_mix")}
                 </button>
                 <button
                   type="button"
@@ -5765,7 +5844,7 @@ export default function Page() {
                     fontFamily: "'Space Mono', monospace",
                   }}
                 >
-                  CLEAR
+                  {t("clear")}
                 </button>
               </div>
             </>
@@ -5831,10 +5910,10 @@ export default function Page() {
           <div
             style={{
               marginBottom: 24,
-              background: "rgba(255,255,255,0.025)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              background: "rgba(255,255,255,0.02)",
+              border: "1px solid rgba(255,255,255,0.09)",
               borderRadius: 14,
-              padding: "16px 18px",
+              padding: "16px 20px",
               display: "grid",
               gap: 16,
             }}
@@ -5842,11 +5921,11 @@ export default function Page() {
             {/* ── Header ── */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <div>
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.68)", marginBottom: 4 }}>
-                  MIX EDITOR
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2.8, color: "rgba(255,255,255,0.88)", fontWeight: 700, marginBottom: 4 }}>
+                  {t("mix_editor")}
                 </div>
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>
-                  {editorError ? "Editor no disponible; el procesado sigue funcionando." : "Trim · fade in/out · preview"}
+                  {editorError ? t("editor_unavailable") : t("trim_fade")}
                 </div>
               </div>
               {editorLoading && (
@@ -5900,7 +5979,7 @@ export default function Page() {
                 borderTop: "1px solid rgba(255,255,255,0.06)",
               }}
             >
-              <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 9, letterSpacing: 2, color: "rgba(255,255,255,0.38)" }}>TRIM · FADE</span>
+              <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 9, letterSpacing: 2, color: "rgba(255,255,255,0.38)" }}>{t("trim_fade_short")}</span>
               <span style={{ fontSize: 9, color: "rgba(255,255,255,0.28)" }}>{paramsExpanded ? "▲" : "▼"}</span>
             </div>
             {paramsExpanded && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 24px" }}>
@@ -5981,9 +6060,9 @@ export default function Page() {
             <div
               style={{
                 borderRadius: 12,
-                border: "1px solid rgba(232,197,71,0.15)",
-                background: "linear-gradient(180deg, rgba(232,197,71,0.06), rgba(232,197,71,0.02))",
-                padding: "12px 14px",
+                border: "1px solid rgba(255,255,255,0.1)",
+                background: "rgba(0,0,0,0.28)",
+                padding: "12px 16px",
                 display: "grid",
                 gap: 10,
               }}
@@ -5998,13 +6077,14 @@ export default function Page() {
                   }}
                   disabled={editorLoading || previewBusy}
                   style={{
-                    width: 38, height: 38, borderRadius: 999, flexShrink: 0,
-                    border: `1px solid ${isPreviewPlaying ? accentColor : "rgba(255,255,255,0.14)"}`,
-                    background: isPreviewPlaying ? accentColor : "rgba(255,255,255,0.03)",
-                    color: isPreviewPlaying ? "#050505" : "rgba(255,255,255,0.82)",
+                    width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
+                    border: `1.5px solid ${isPreviewPlaying ? "#e8c547" : "rgba(255,255,255,0.28)"}`,
+                    background: isPreviewPlaying ? "linear-gradient(135deg, #e8c547, #ffd978)" : "rgba(255,255,255,0.05)",
+                    color: isPreviewPlaying ? "#0a0a0a" : "rgba(255,255,255,0.92)",
                     cursor: editorLoading || previewBusy ? "wait" : "pointer",
-                    fontFamily: "'Space Mono', monospace", fontSize: 12,
-                    boxShadow: isPreviewPlaying ? `0 0 18px rgba(232,197,71,0.22)` : "none",
+                    fontFamily: "'Space Mono', monospace", fontSize: isPreviewPlaying ? 13 : 16, fontWeight: 700,
+                    boxShadow: isPreviewPlaying ? "0 0 22px rgba(232,197,71,0.4), 0 2px 8px rgba(0,0,0,0.4)" : "0 2px 8px rgba(0,0,0,0.3)",
+                    transition: "all 0.18s ease",
                   }}
                   title={isPreviewPlaying ? "Pausar" : "Reproducir preview"}
                 >
@@ -6015,13 +6095,14 @@ export default function Page() {
                   onClick={(event) => { event.stopPropagation(); restartPreview(); }}
                   disabled={editorLoading || previewBusy || !editedDuration}
                   style={{
-                    height: 38, borderRadius: 999, flexShrink: 0,
-                    border: "1px solid rgba(255,255,255,0.12)",
+                    width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
+                    border: "1.5px solid rgba(255,255,255,0.18)",
                     background: "rgba(255,255,255,0.03)",
                     color: "rgba(255,255,255,0.65)",
                     cursor: editorLoading || previewBusy ? "wait" : "pointer",
-                    fontFamily: "'Space Mono', monospace", fontSize: 10,
-                    letterSpacing: 1.2, padding: "0 14px",
+                    fontSize: 16,
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                    transition: "all 0.18s ease",
                   }}
                   title="Volver al inicio"
                 >
@@ -6029,7 +6110,7 @@ export default function Page() {
                 </button>
                 <div style={{ flex: 1, minWidth: 120 }}>
                   {/* progress bar */}
-                  <div style={{ position: "relative", height: 8, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden", marginBottom: 6 }}>
+                  <div style={{ position: "relative", height: 8, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "visible", marginBottom: 6 }}>
                     <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, rgba(232,197,71,0.15), rgba(232,197,71,0.06))" }} />
                     <div style={{
                       position: "absolute", left: 0, top: 0, bottom: 0,
@@ -6040,9 +6121,24 @@ export default function Page() {
                       boxShadow: "0 0 10px rgba(232,197,71,0.4)",
                       transition: isPreviewPlaying ? "width 0.08s linear" : "width 0.18s ease",
                     }} />
+                    <div style={{
+                      position: "absolute",
+                      top: "50%",
+                      left: `${previewProgress}%`,
+                      transform: "translate(-50%, -50%)",
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      background: "#e8c547",
+                      border: "2px solid rgba(8,9,11,0.9)",
+                      boxShadow: "0 0 0 3px rgba(232,197,71,0.22), 0 2px 6px rgba(0,0,0,0.5)",
+                      opacity: previewProgress > 0 || isPreviewPlaying ? 1 : 0,
+                      transition: "opacity 0.2s ease",
+                      pointerEvents: "none",
+                    }} />
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "rgba(255,255,255,0.42)", fontFamily: "'Space Mono', monospace" }}>
-                    <span>{previewBusy ? "Renderizando…" : isPreviewPlaying ? `${formatSeconds(previewOffset)} / ${formatSeconds(editedDuration)}` : `LEN ${formatSeconds(editedDuration)}`}</span>
+                    <span>{previewBusy ? t("rendering_preview") : isPreviewPlaying ? `${formatSeconds(previewOffset)} / ${formatSeconds(editedDuration)}` : `LEN ${formatSeconds(editedDuration)}`}</span>
                     <span style={{ display: "flex", gap: 10, color: "rgba(255,255,255,0.38)" }}>
                       <span>IN {formatSeconds(trimStart)}</span>
                       <span>OUT {formatSeconds(trimEnd || editorDuration)}</span>
@@ -6092,7 +6188,7 @@ export default function Page() {
                 </div>
 
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
-                  Remote mode envia el audio editado al endpoint de Modal, descarga un ZIP con stems y lo carga en los reproductores y el secuenciador.
+                  {t("processing_remote")}
                 </div>
               </div>
             )}
@@ -6194,6 +6290,8 @@ export default function Page() {
             stemDefs={visibleStems}
             baseName={baseName}
             onStopOtherPlayback={stopAllPlayback}
+            accentColor={accentColor}
+            t={t}
           />
         )}
 
