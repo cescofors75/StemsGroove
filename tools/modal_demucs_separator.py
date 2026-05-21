@@ -21,6 +21,8 @@ model_cache = modal.Volume.from_name("demucs-cache", create_if_missing=True)
 @app.function(
     image=image,
     gpu="T4",
+    cpu=4.0,
+    memory=8192,
     volumes={"/root/.cache/torch": model_cache},
     timeout=600,
     scaledown_window=120,

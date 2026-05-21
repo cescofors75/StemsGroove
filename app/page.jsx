@@ -2993,6 +2993,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
   const [meters, setMeters] = useState({});
   const [exportBusy, setExportBusy] = useState(false);
   const [stemPeaks, setStemPeaks] = useState({});
+  const [downloadMenu, setDownloadMenu] = useState(null);
 
   const mixAudioCtxRef = useRef(null);
   const mixBuffersRef = useRef({});
@@ -3368,6 +3369,51 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
     document.body.style.overflow = fullscreen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   }, [fullscreen]);
+
+  function audioBufferToWav(buffer) {
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const numSamples = buffer.length;
+    const dataLen = numSamples * numChannels * 2;
+    const ab = new ArrayBuffer(44 + dataLen);
+    const view = new DataView(ab);
+    const writeStr = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+    writeStr(0, 'RIFF'); view.setUint32(4, 36 + dataLen, true);
+    writeStr(8, 'WAVE'); writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true); view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numChannels * 2, true); view.setUint16(32, numChannels * 2, true);
+    view.setUint16(34, 16, true); writeStr(36, 'data'); view.setUint32(40, dataLen, true);
+    const channels = Array.from({ length: numChannels }, (_, c) => buffer.getChannelData(c));
+    let off = 44;
+    for (let i = 0; i < numSamples; i++) {
+      for (let c = 0; c < numChannels; c++) {
+        const s = Math.max(-1, Math.min(1, channels[c][i]));
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        off += 2;
+      }
+    }
+    return new Blob([ab], { type: 'audio/wav' });
+  }
+
+  function downloadStem(stemId, fmt) {
+    const safeName = (baseName || 'stem').replace(/\.[^.]+$/, '');
+    if (fmt === 'mp3') {
+      const url = stemUrls[stemId];
+      if (!url) return;
+      const a = document.createElement('a');
+      a.href = url; a.download = `${safeName}_${stemId}.mp3`; a.click();
+    } else if (fmt === 'wav') {
+      const buf = mixBuffersRef.current[stemId];
+      if (!buf) return;
+      const blob = audioBufferToWav(buf);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${safeName}_${stemId}.wav`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    }
+    setDownloadMenu(null);
+  }
 
   return (
     <div
@@ -3771,6 +3817,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                       key={stem.id}
                       className={flash ? `row-flash-${flash}` : undefined}
                       style={{
+                        position: "relative",
                         display: "grid",
                         gridTemplateColumns: "152px 1fr 164px",
                         gap: 8,
@@ -3905,34 +3952,6 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                           ref={(el) => { mixCanvasRefs.current[stem.id] = el; }}
                           style={{ width: "100%", height: "100%", display: "block" }}
                         />
-                        {/* Expand/collapse button */}
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); setExpandedTrack(t => t === stem.id ? null : stem.id); }}
-                          style={{
-                            position: "absolute",
-                            top: 5,
-                            right: 6,
-                            width: 18,
-                            height: 14,
-                            background: "rgba(0,0,0,0.55)",
-                            border: `1px solid ${expandedTrack === stem.id ? stem.color : 'rgba(255,255,255,0.18)'}`,
-                            borderRadius: 3,
-                            color: expandedTrack === stem.id ? stem.color : "rgba(255,255,255,0.45)",
-                            fontSize: 7,
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            lineHeight: 1,
-                            padding: 0,
-                            zIndex: 2,
-                            transition: "color 0.15s, border-color 0.15s",
-                          }}
-                          title={expandedTrack === stem.id ? "Colapsar pista" : "Expandir pista"}
-                        >
-                          {expandedTrack === stem.id ? "▲" : "▼"}
-                        </button>
                         {/* Played region */}
                         <div
                           style={{
@@ -4036,6 +4055,120 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                               />
                             );
                           })}
+                        </div>
+                      </div>
+
+                      {/* ── Track action buttons (top-right) ── */}
+                      {downloadMenu === stem.id && (
+                        <div
+                          style={{ position: 'fixed', inset: 0, zIndex: 9 }}
+                          onClick={(e) => { e.stopPropagation(); setDownloadMenu(null); }}
+                        />
+                      )}
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 6,
+                          right: 10,
+                          display: "flex",
+                          gap: 3,
+                          zIndex: 10,
+                        }}
+                      >
+                        {/* Expand/collapse */}
+                        <button
+                          type="button"
+                          onClick={() => setExpandedTrack(t => t === stem.id ? null : stem.id)}
+                          style={{
+                            width: 20,
+                            height: 16,
+                            background: expandedTrack === stem.id ? `${stem.color}22` : "rgba(10,10,18,0.75)",
+                            border: `1px solid ${expandedTrack === stem.id ? stem.color : 'rgba(255,255,255,0.2)'}`,
+                            borderRadius: 3,
+                            color: expandedTrack === stem.id ? stem.color : "rgba(255,255,255,0.5)",
+                            fontSize: 7,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: 0,
+                            transition: "color 0.15s, border-color 0.15s, background 0.15s",
+                            backdropFilter: "blur(4px)",
+                          }}
+                          title={expandedTrack === stem.id ? "Colapsar pista" : "Expandir pista"}
+                        >
+                          {expandedTrack === stem.id ? "▲" : "▼"}
+                        </button>
+
+                        {/* Download button */}
+                        <div style={{ position: "relative" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setDownloadMenu(dm => dm === stem.id ? null : stem.id); }}
+                            style={{
+                              width: 20,
+                              height: 16,
+                              background: downloadMenu === stem.id ? `${stem.color}22` : "rgba(10,10,18,0.75)",
+                              border: `1px solid ${downloadMenu === stem.id ? stem.color : 'rgba(255,255,255,0.2)'}`,
+                              borderRadius: 3,
+                              color: downloadMenu === stem.id ? stem.color : "rgba(255,255,255,0.5)",
+                              fontSize: 10,
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: 0,
+                              transition: "color 0.15s, border-color 0.15s, background 0.15s",
+                              backdropFilter: "blur(4px)",
+                              lineHeight: 1,
+                            }}
+                            title="Descargar stem"
+                          >
+                            ↓
+                          </button>
+                          {downloadMenu === stem.id && (
+                            <div
+                              style={{
+                                position: "absolute",
+                                top: "calc(100% + 4px)",
+                                right: 0,
+                                background: "#14151f",
+                                border: `1px solid ${stem.color}55`,
+                                borderRadius: 6,
+                                padding: "4px 0",
+                                zIndex: 10,
+                                minWidth: 76,
+                                boxShadow: "0 6px 20px rgba(0,0,0,0.8)",
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {[['mp3', 'MP3'], ['wav', 'WAV']].map(([fmt, label]) => (
+                                <button
+                                  key={fmt}
+                                  type="button"
+                                  onClick={() => downloadStem(stem.id, fmt)}
+                                  style={{
+                                    display: "block",
+                                    width: "100%",
+                                    padding: "6px 12px",
+                                    background: "transparent",
+                                    border: "none",
+                                    color: "rgba(255,255,255,0.72)",
+                                    fontFamily: "'Space Mono', monospace",
+                                    fontSize: 9,
+                                    letterSpacing: 1.2,
+                                    cursor: "pointer",
+                                    textAlign: "left",
+                                    transition: "background 0.1s, color 0.1s",
+                                  }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = `${stem.color}22`; e.currentTarget.style.color = stem.color; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.72)"; }}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
