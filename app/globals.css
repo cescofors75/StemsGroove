@@ -41,6 +41,35 @@ textarea {
   font: inherit;
 }
 
+/* ── Mixer button press feel ───────────────────────────────────────── */
+.btn-mx {
+  transition: transform 0.1s ease, box-shadow 0.15s ease !important;
+  will-change: transform;
+}
+.btn-mx:active {
+  transform: scale(0.78) !important;
+}
+
+/* ── Row flash animations ───────────────────────────────────────────── */
+@keyframes rowFlashRed {
+  0%   { box-shadow: 0 0 0   0   rgba(232, 84, 71, 0);   }
+  18%  { box-shadow: 0 0 22px 6px rgba(232, 84, 71, 0.65); }
+  100% { box-shadow: 0 0 0   0   rgba(232, 84, 71, 0);   }
+}
+@keyframes rowFlashGold {
+  0%   { box-shadow: 0 0 0   0   rgba(232,197, 71, 0);   }
+  18%  { box-shadow: 0 0 26px 8px rgba(232,197, 71, 0.7);  }
+  100% { box-shadow: 0 0 0   0   rgba(232,197, 71, 0);   }
+}
+@keyframes rowFlashWhite {
+  0%   { box-shadow: 0 0 0   0   rgba(180,255,180, 0);   }
+  18%  { box-shadow: 0 0 20px 5px rgba(180,255,180, 0.5);  }
+  100% { box-shadow: 0 0 0   0   rgba(180,255,180, 0);   }
+}
+.row-flash-mute  { animation: rowFlashRed   0.55s ease-out forwards; }
+.row-flash-solo  { animation: rowFlashGold  0.6s  ease-out forwards; }
+.row-flash-clear { animation: rowFlashWhite 0.5s  ease-out forwards; }
+
 a {
   color: inherit;
 }

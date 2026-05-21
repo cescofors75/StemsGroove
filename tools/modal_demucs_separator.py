@@ -69,8 +69,10 @@ def separate(audio_b64: dict):
             "-n", model,
             "-o", str(out_dir),
             "--shifts", str(max(0, shifts)),
-            "--overlap", str(max(0.0, min(0.5, overlap))),
         ]
+        # --overlap solo aplica a modelos htdemucs (segmented processing)
+        if model.startswith("htdemucs"):
+            cmd += ["--overlap", str(max(0.0, min(0.5, overlap)))]
         if not no_mp3:
             cmd.append("--mp3")
         if segment is not None:

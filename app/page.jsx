@@ -2894,6 +2894,7 @@ function drawMixerWaveform(canvas, mono, color) {
 
 function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback }) {
   const [expanded, setExpanded] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
   const [mixReady, setMixReady] = useState(false);
   const [mixLoading, setMixLoading] = useState(false);
   const [mixError, setMixError] = useState("");
@@ -2902,6 +2903,14 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
   const [mixDuration, setMixDuration] = useState(0);
   const [trackMuted, setTrackMuted] = useState({});
   const [trackSolo, setTrackSolo] = useState({});
+  const [rowFlash, setRowFlash] = useState({}); // stemId → 'mute'|'solo'|'clear'|null
+
+  const triggerFlash = useCallback((stemId, type, delay = 0) => {
+    setTimeout(() => {
+      setRowFlash(p => ({ ...p, [stemId]: type }));
+      setTimeout(() => setRowFlash(p => ({ ...p, [stemId]: null })), 580);
+    }, delay);
+  }, []);
   const [trackVols, setTrackVols] = useState({});
   const [masterVol, setMasterVol] = useState(90);
   const [meters, setMeters] = useState({});
@@ -3157,6 +3166,19 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
     await mixStartPlayback(mixPauseOffsetRef.current);
   }, [mixStartPlayback, mixStopPlayback, onStopOtherPlayback]);
 
+  // Spacebar = play / pause (solo cuando el mixer está expandido)
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e) => {
+      if (e.code === "Space" && e.target === document.body) {
+        e.preventDefault();
+        handleMixPlay();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded, handleMixPlay]);
+
   const handleMixStop = useCallback(() => {
     mixStopPlayback();
     mixPauseOffsetRef.current = 0;
@@ -3253,11 +3275,18 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
   return (
     <div
       style={{
-        marginBottom: 24,
-        background: "rgba(255,255,255,0.02)",
-        border: "1px solid rgba(255,255,255,0.09)",
-        borderRadius: 14,
-        overflow: "hidden",
+        marginBottom: fullscreen ? 0 : 24,
+        background: fullscreen ? "#08090b" : "rgba(255,255,255,0.02)",
+        border: fullscreen ? "none" : "1px solid rgba(255,255,255,0.09)",
+        borderRadius: fullscreen ? 0 : 14,
+        overflow: fullscreen ? "auto" : "hidden",
+        ...(fullscreen && {
+          position: "fixed",
+          inset: 0,
+          zIndex: 9999,
+          display: "flex",
+          flexDirection: "column",
+        }),
       }}
     >
       <button
@@ -3313,13 +3342,39 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
             {availableStems.length} TRACKS · WAVEFORMS · REALTIME · WAV EXPORT
           </span>
         </div>
-        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
-          {expanded ? "▲" : "▼"}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setFullscreen(f => !f); if (!expanded) setExpanded(true); }}
+            style={{
+              background: "transparent",
+              border: "1px solid rgba(255,255,255,0.15)",
+              borderRadius: 6,
+              color: "rgba(255,255,255,0.55)",
+              cursor: "pointer",
+              width: 26,
+              height: 20,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              lineHeight: 1,
+              padding: 0,
+              flexShrink: 0,
+              transition: "color 0.15s, border-color 0.15s",
+            }}
+            title={fullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+          >
+            {fullscreen ? "⊠" : "⛶"}
+          </button>
+          <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
+            {expanded ? "▲" : "▼"}
+          </span>
+        </div>
       </button>
 
       {expanded && (
-        <div style={{ padding: "18px 20px" }}>
+        <div style={{ padding: "18px 20px", ...(fullscreen && { flex: 1, overflowY: "auto" }) }}>
           {mixLoading && (
             <div
               style={{
@@ -3556,6 +3611,57 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                 >
                   {exportBusy ? "RENDERIZANDO…" : "↓ EXPORT MIX WAV"}
                 </button>
+
+                {/* All Mute / All Clear */}
+                <div style={{ display: "flex", gap: 5, marginLeft: "auto" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrackMuted(Object.fromEntries(availableStems.map(s => [s.id, true])));
+                      availableStems.forEach((s, i) => triggerFlash(s.id, 'mute', i * 65));
+                    }}
+                    style={{
+                      height: 28,
+                      borderRadius: 14,
+                      border: "1px solid rgba(232,84,71,0.5)",
+                      background: "rgba(232,84,71,0.1)",
+                      color: "rgba(232,84,71,0.85)",
+                      cursor: "pointer",
+                      padding: "0 12px",
+                      fontSize: 8,
+                      fontFamily: "'Space Mono', monospace",
+                      letterSpacing: 1,
+                      whiteSpace: "nowrap",
+                    }}
+                    title="Mutear todos los stems"
+                  >
+                    ALL MUTE
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrackMuted(Object.fromEntries(availableStems.map(s => [s.id, false])));
+                      setTrackSolo(Object.fromEntries(availableStems.map(s => [s.id, false])));
+                      availableStems.forEach((s, i) => triggerFlash(s.id, 'clear', i * 65));
+                    }}
+                    style={{
+                      height: 28,
+                      borderRadius: 14,
+                      border: "1px solid rgba(255,255,255,0.25)",
+                      background: "rgba(255,255,255,0.04)",
+                      color: "rgba(255,255,255,0.7)",
+                      cursor: "pointer",
+                      padding: "0 12px",
+                      fontSize: 8,
+                      fontFamily: "'Space Mono', monospace",
+                      letterSpacing: 1,
+                      whiteSpace: "nowrap",
+                    }}
+                    title="Quitar todos los mutes y solos"
+                  >
+                    ALL CLEAR
+                  </button>
+                </div>
               </div>
 
               {/* ─── Track rows ──────────────────────────────────────────── */}
@@ -3565,19 +3671,21 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                   const isEffMuted = trackSolo[stem.id] ? false : (trackMuted[stem.id] || mixHasSolo);
                   const meterLvl = clamp(meters[stem.id] ?? 0, 0, 1);
                   const vol = trackVols[stem.id] ?? 85;
+                  const flash = rowFlash[stem.id];
                   return (
                     <div
                       key={stem.id}
+                      className={flash ? `row-flash-${flash}` : undefined}
                       style={{
                         display: "grid",
                         gridTemplateColumns: "152px 1fr 164px",
                         gap: 8,
                         alignItems: "center",
-                        background: isEffMuted ? "rgba(255,255,255,0.015)" : stem.bg,
-                        border: `1px solid ${isEffMuted ? "rgba(255,255,255,0.06)" : stem.border}`,
+                        background: flash === 'mute' ? 'rgba(232,84,71,0.18)' : flash === 'solo' ? 'rgba(232,197,71,0.16)' : flash === 'clear' ? 'rgba(120,230,120,0.12)' : isEffMuted ? "rgba(255,255,255,0.015)" : stem.bg,
+                        border: flash === 'mute' ? '1px solid rgba(232,84,71,0.8)' : flash === 'solo' ? '1px solid rgba(232,197,71,0.85)' : flash === 'clear' ? '1px solid rgba(120,230,120,0.6)' : `1px solid ${isEffMuted ? "rgba(255,255,255,0.06)" : stem.border}`,
                         borderRadius: 10,
                         padding: "8px 12px",
-                        transition: "all 0.22s ease",
+                        transition: "background 0.2s ease, border 0.2s ease, opacity 0.22s ease",
                         opacity: isEffMuted ? 0.42 : 1,
                       }}
                     >
@@ -3610,27 +3718,38 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                           <div style={{ display: "flex", gap: 4 }}>
                             <button
                               type="button"
-                              onClick={() => setTrackMuted((p) => ({ ...p, [stem.id]: !p[stem.id] }))}
+                              className="btn-mx"
+                              onClick={() => {
+                                if (!trackSolo[stem.id]) {
+                                  const nowMuting = !trackMuted[stem.id];
+                                  setTrackMuted((p) => ({ ...p, [stem.id]: nowMuting }));
+                                  triggerFlash(stem.id, nowMuting ? 'mute' : 'clear');
+                                }
+                              }}
                               style={{
                                 width: 28,
                                 height: 18,
                                 borderRadius: 5,
-                                border: `1px solid ${trackMuted[stem.id] ? "rgba(232,84,71,0.75)" : "rgba(255,255,255,0.2)"}`,
-                                background: trackMuted[stem.id] ? "rgba(232,84,71,0.22)" : "rgba(255,255,255,0.04)",
-                                color: trackMuted[stem.id] ? "#e85447" : "rgba(255,255,255,0.45)",
+                                border: `1px solid ${!trackSolo[stem.id] && trackMuted[stem.id] ? "rgba(232,84,71,0.75)" : "rgba(255,255,255,0.2)"}`,
+                                background: !trackSolo[stem.id] && trackMuted[stem.id] ? "rgba(232,84,71,0.22)" : "rgba(255,255,255,0.04)",
+                                color: !trackSolo[stem.id] && trackMuted[stem.id] ? "#e85447" : "rgba(255,255,255,0.45)",
                                 cursor: "pointer",
                                 fontSize: 8,
                                 fontFamily: "'Space Mono', monospace",
                                 fontWeight: 700,
-                                transition: "all 0.15s ease",
                               }}
-                              title={trackMuted[stem.id] ? "Activar pista" : "Mutear pista"}
+                              title={!trackSolo[stem.id] && trackMuted[stem.id] ? "Activar pista" : "Mutear pista"}
                             >
                               M
                             </button>
                             <button
                               type="button"
-                              onClick={() => setTrackSolo((p) => { const wasOn = p[stem.id]; const reset = Object.fromEntries(Object.keys(p).map(k => [k, false])); return wasOn ? reset : { ...reset, [stem.id]: true }; })}
+                              className="btn-mx"
+                              onClick={() => {
+                                const wasOn = trackSolo[stem.id];
+                                setTrackSolo((p) => { const reset = Object.fromEntries(Object.keys(p).map(k => [k, false])); return wasOn ? reset : { ...reset, [stem.id]: true }; });
+                                triggerFlash(stem.id, wasOn ? 'clear' : 'solo');
+                              }}
                               style={{
                                 width: 28,
                                 height: 18,
