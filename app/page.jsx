@@ -3272,11 +3272,19 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
     return `${m}:${String(sec).padStart(2, "0")}.${ds}`;
   };
 
+  // Bloquear scroll del body en fullscreen
+  useEffect(() => {
+    document.body.style.overflow = fullscreen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [fullscreen]);
+
   return (
     <div
       style={{
         marginBottom: fullscreen ? 0 : 24,
-        background: fullscreen ? "#08090b" : "rgba(255,255,255,0.02)",
+        background: fullscreen
+          ? "radial-gradient(ellipse 70% 45% at 50% 0%, rgba(232,197,71,0.06) 0%, transparent 55%), radial-gradient(ellipse 55% 40% at 88% 100%, rgba(71,184,232,0.05) 0%, transparent 50%), #05060a"
+          : "rgba(255,255,255,0.02)",
         border: fullscreen ? "none" : "1px solid rgba(255,255,255,0.09)",
         borderRadius: fullscreen ? 0 : 14,
         overflow: fullscreen ? "auto" : "hidden",
@@ -3289,20 +3297,24 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
         }),
       }}
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setExpanded((e) => !e)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((ex) => !ex); } }}
         style={{
           width: "100%",
-          background: "transparent",
+          background: fullscreen ? "rgba(0,0,0,0.38)" : "transparent",
           border: "none",
-          borderBottom: expanded ? "1px solid rgba(255,255,255,0.08)" : "none",
+          borderBottom: expanded ? `1px solid ${fullscreen ? 'rgba(232,197,71,0.14)' : 'rgba(255,255,255,0.08)'}` : "none",
+          boxShadow: fullscreen && expanded ? "0 1px 30px rgba(232,197,71,0.07)" : "none",
           cursor: "pointer",
-          padding: "14px 20px",
+          padding: fullscreen ? "16px 28px" : "14px 20px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           color: "inherit",
+          boxSizing: "border-box",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -3371,10 +3383,10 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
             {expanded ? "▲" : "▼"}
           </span>
         </div>
-      </button>
+      </div>
 
       {expanded && (
-        <div style={{ padding: "18px 20px", ...(fullscreen && { flex: 1, overflowY: "auto" }) }}>
+        <div style={{ padding: fullscreen ? "20px 28px" : "18px 20px", ...(fullscreen && { flex: 1, overflowY: "auto" }) }}>
           {mixLoading && (
             <div
               style={{
@@ -3410,12 +3422,13 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                   display: "flex",
                   alignItems: "center",
                   gap: 12,
-                  marginBottom: 16,
-                  background: "rgba(0,0,0,0.28)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 12,
-                  padding: "12px 16px",
+                  marginBottom: fullscreen ? 20 : 16,
+                  background: fullscreen ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.28)",
+                  border: `1px solid ${fullscreen ? 'rgba(255,255,255,0.13)' : 'rgba(255,255,255,0.1)'}`,
+                  borderRadius: fullscreen ? 16 : 12,
+                  padding: fullscreen ? "14px 22px" : "12px 16px",
                   flexWrap: "wrap",
+                  backdropFilter: fullscreen ? "blur(12px)" : "none",
                 }}
               >
                 {/* Play / Pause  +  Stop */}
@@ -3424,10 +3437,10 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                     type="button"
                     onClick={handleMixPlay}
                     style={{
-                      width: 44,
-                      height: 44,
+                      width: fullscreen ? 54 : 44,
+                      height: fullscreen ? 54 : 44,
                       borderRadius: "50%",
-                      border: `1.5px solid ${mixPlaying ? "#e8c547" : "rgba(255,255,255,0.28)"}`,
+                      border: `${fullscreen ? '2px' : '1.5px'} solid ${mixPlaying ? "#e8c547" : "rgba(255,255,255,0.28)"}`,
                       background: mixPlaying
                         ? "linear-gradient(135deg, #e8c547, #ffd978)"
                         : "rgba(255,255,255,0.05)",
@@ -3436,7 +3449,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      fontSize: mixPlaying ? 11 : 16,
+                      fontSize: mixPlaying ? (fullscreen ? 13 : 11) : (fullscreen ? 20 : 16),
                       fontFamily: "'Space Mono', monospace",
                       fontWeight: 700,
                       boxShadow: mixPlaying
@@ -3452,8 +3465,8 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                     type="button"
                     onClick={handleMixStop}
                     style={{
-                      width: 44,
-                      height: 44,
+                      width: fullscreen ? 54 : 44,
+                      height: fullscreen ? 54 : 44,
                       borderRadius: "50%",
                       border: "1.5px solid rgba(255,255,255,0.18)",
                       background: "rgba(255,255,255,0.03)",
@@ -3462,7 +3475,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      fontSize: 13,
+                      fontSize: fullscreen ? 16 : 13,
                       boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
                       transition: "all 0.18s ease",
                     }}
@@ -3477,11 +3490,11 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                   <span
                     style={{
                       fontFamily: "'Space Mono', monospace",
-                      fontSize: 22,
+                      fontSize: fullscreen ? 34 : 22,
                       fontWeight: 700,
                       letterSpacing: 1.5,
                       color: mixPlaying ? "#e8c547" : "rgba(255,255,255,0.82)",
-                      minWidth: 90,
+                      minWidth: fullscreen ? 130 : 90,
                       textShadow: mixPlaying ? "0 0 20px rgba(232,197,71,0.45)" : "none",
                       transition: "color 0.3s ease, text-shadow 0.3s ease",
                     }}
@@ -3510,7 +3523,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                     flex: 1,
                     minWidth: 120,
                     position: "relative",
-                    height: 8,
+                    height: fullscreen ? 12 : 8,
                     borderRadius: 999,
                     background: "rgba(255,255,255,0.1)",
                     cursor: "pointer",
@@ -3693,12 +3706,12 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <div
                           style={{
-                            width: 4,
-                            height: 38,
+                            width: fullscreen ? 5 : 4,
+                            height: fullscreen ? 54 : 38,
                             borderRadius: 3,
                             background: isEffMuted ? "rgba(255,255,255,0.1)" : stem.color,
                             flexShrink: 0,
-                            boxShadow: isEffMuted ? "none" : `0 0 8px ${stem.color}88`,
+                            boxShadow: isEffMuted ? "none" : `0 0 ${fullscreen ? 12 : 8}px ${stem.color}${fullscreen ? 'cc' : '88'}`,
                             transition: "all 0.2s ease",
                           }}
                         />
@@ -3706,8 +3719,8 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                           <div
                             style={{
                               fontFamily: "'Space Mono', monospace",
-                              fontSize: 9,
-                              letterSpacing: 1.8,
+                              fontSize: fullscreen ? 11 : 9,
+                              letterSpacing: fullscreen ? 2.5 : 1.8,
                               color: isEffMuted ? "rgba(255,255,255,0.28)" : stem.color,
                               fontWeight: 700,
                               marginBottom: 5,
@@ -3727,14 +3740,14 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                                 }
                               }}
                               style={{
-                                width: 28,
-                                height: 18,
+                                width: fullscreen ? 36 : 28,
+                                height: fullscreen ? 22 : 18,
                                 borderRadius: 5,
                                 border: `1px solid ${!trackSolo[stem.id] && trackMuted[stem.id] ? "rgba(232,84,71,0.75)" : "rgba(255,255,255,0.2)"}`,
                                 background: !trackSolo[stem.id] && trackMuted[stem.id] ? "rgba(232,84,71,0.22)" : "rgba(255,255,255,0.04)",
                                 color: !trackSolo[stem.id] && trackMuted[stem.id] ? "#e85447" : "rgba(255,255,255,0.45)",
                                 cursor: "pointer",
-                                fontSize: 8,
+                                fontSize: fullscreen ? 9 : 8,
                                 fontFamily: "'Space Mono', monospace",
                                 fontWeight: 700,
                               }}
@@ -3751,14 +3764,14 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                                 triggerFlash(stem.id, wasOn ? 'clear' : 'solo');
                               }}
                               style={{
-                                width: 28,
-                                height: 18,
+                                width: fullscreen ? 36 : 28,
+                                height: fullscreen ? 22 : 18,
                                 borderRadius: 5,
                                 border: `1px solid ${trackSolo[stem.id] ? "rgba(232,197,71,0.8)" : "rgba(255,255,255,0.2)"}`,
                                 background: trackSolo[stem.id] ? "rgba(232,197,71,0.18)" : "rgba(255,255,255,0.04)",
                                 color: trackSolo[stem.id] ? "#e8c547" : "rgba(255,255,255,0.45)",
                                 cursor: "pointer",
-                                fontSize: 8,
+                                fontSize: fullscreen ? 9 : 8,
                                 fontFamily: "'Space Mono', monospace",
                                 fontWeight: 700,
                                 transition: "all 0.15s ease",
@@ -3775,11 +3788,11 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
                       <div
                         style={{
                           position: "relative",
-                          height: 58,
+                          height: fullscreen ? 80 : 58,
                           borderRadius: 7,
                           overflow: "hidden",
                           cursor: "pointer",
-                          border: "1px solid rgba(255,255,255,0.07)",
+                          border: `1px solid ${fullscreen ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.07)'}`,
                         }}
                         onClick={(e) => {
                           const rect = e.currentTarget.getBoundingClientRect();
@@ -3943,7 +3956,7 @@ export default function Page() {
   const [playheadStep, setPlayheadStep] = useState(-1);
   const [patternBars, setPatternBars] = useState(4);
   const [sequencerCharacter, setSequencerCharacter] = useState("punch");
-  const [separateMode, setSeparateMode] = useState("mdx_extra_q");
+  const [separateMode, setSeparateMode] = useState("htdemucs_6s");
   const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85, guitar: 85, piano: 85 });
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
   const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
@@ -5797,11 +5810,8 @@ export default function Page() {
               <div style={{ display: "grid", gap: 10, marginBottom: 10 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {[
-                    { id: "htdemucs", label: "BASE", hint: "4 stems · Buena calidad general" },
-                    { id: "htdemucs_ft", label: "FT", hint: "4 stems · Fine-tuned, recomendado" },
-                    { id: "htdemucs_6s", label: "6S", hint: "6 stems · Guitar & Piano" },
-                    { id: "mdx_extra", label: "MDX", hint: "4 stems · Mejor para vocales" },
-                    { id: "mdx_extra_q", label: "MDX-Q", hint: "4 stems · Ligero" },
+                    { id: "htdemucs_6s", label: "6S", hint: "6 stems · Vocals · Drums · Bass · Guitar · Piano · Other" },
+                    { id: "htdemucs_ft", label: "FT", hint: "4 stems · Vocals · Drums · Bass · Other · Fine-tuned" },
                   ].map((mode) => (
                     <button
                       key={mode.id}
