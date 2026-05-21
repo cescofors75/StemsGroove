@@ -2099,7 +2099,7 @@ function GrooveComparison({ stemUrls }) {
   const GC_TEXT_SOFT = "rgba(255,255,255,0.62)";
   const GC_TEXT_DISABLED = "rgba(255,255,255,0.38)";
 
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [bpm, setBpm] = useState(120);
   const [subdivision, setSubdivision] = useState(16);
   const [threshold, setThreshold] = useState(0.15);
@@ -3084,12 +3084,14 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
     });
   }, [availableStems]);
 
+  // Used only from mixStartPlayback (reads from refs, which are always up-to-date at call time)
   const mixApplyGains = useCallback(() => {
-    const hs = mixHasSoloRef.current;
+    const soloMap = mixSoloRef.current;
+    const hs = Object.values(soloMap).some(Boolean);
     availableStems.forEach((stem) => {
       const g = mixGainNodesRef.current[stem.id];
       if (!g) return;
-      const eff = mixMutedRef.current[stem.id] || (hs && !mixSoloRef.current[stem.id]);
+      const eff = mixMutedRef.current[stem.id] || (hs && !soloMap[stem.id]);
       g.gain.value = eff ? 0 : (mixVolsRef.current[stem.id] ?? 85) / 100;
     });
     if (mixMasterGainRef.current) mixMasterGainRef.current.gain.value = mixMasterVolRef.current / 100;
@@ -3173,7 +3175,17 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback })
     if (wasPlaying) requestAnimationFrame(() => mixStartPlayback(newTime));
   }, [mixStartPlayback, mixStopRaf]);
 
-  useEffect(() => { mixApplyGains(); }, [mixApplyGains, trackMuted, trackSolo, trackVols, masterVol]);
+  // Reactive gain update — uses state values directly, no ref-sync race condition
+  useEffect(() => {
+    const hasSolo = Object.values(trackSolo).some(Boolean);
+    availableStems.forEach((stem) => {
+      const g = mixGainNodesRef.current[stem.id];
+      if (!g) return;
+      const eff = trackMuted[stem.id] || (hasSolo && !trackSolo[stem.id]);
+      g.gain.value = eff ? 0 : (trackVols[stem.id] ?? 85) / 100;
+    });
+    if (mixMasterGainRef.current) mixMasterGainRef.current.gain.value = masterVol / 100;
+  }, [availableStems, trackMuted, trackSolo, trackVols, masterVol]);
 
   useEffect(() => () => {
     mixStopPlayback();
@@ -3848,6 +3860,13 @@ export default function Page() {
   const accentColor = "#e8c547";
   const ready = status === "done";
   const processing = status === "processing";
+
+  const [showSequencer, setShowSequencer] = useState(false);
+
+  const visibleStems = useMemo(
+    () => separateMode === "htdemucs_6s" ? STEMS : STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano"),
+    [separateMode],
+  );
   const analyzingPatterns = patternStatus === "processing";
 
   const revokeStemWavCache = useCallback(() => {
@@ -5699,14 +5718,14 @@ export default function Page() {
         {ready && Object.keys(stems).length > 0 && (
           <StemMixer
             stems={stems}
-            stemDefs={STEMS}
+            stemDefs={visibleStems}
             baseName={baseName}
             onStopOtherPlayback={stopAllPlayback}
           />
         )}
 
         <div className="stems-grid">
-          {STEMS.map((stem) => (
+          {visibleStems.map((stem) => (
             <StemCard
               key={stem.id}
               stem={stem}
@@ -5731,11 +5750,11 @@ export default function Page() {
               background: "rgba(255,255,255,0.02)",
               border: "1px solid rgba(255,255,255,0.08)",
               borderRadius: 14,
-              padding: "16px 18px",
+              padding: showSequencer ? "16px 18px" : "12px 18px",
               marginBottom: 20,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showSequencer ? 10 : 0, gap: 12, flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Space Mono', monospace", letterSpacing: 2, fontSize: 10, color: "rgba(255,255,255,0.72)" }}>
                   SEQUENCER PATTERN
@@ -5907,9 +5926,18 @@ export default function Page() {
                 <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.18)", borderRadius: 999, padding: "2px 8px", letterSpacing: 0.8 }}>
                   CHARACTER {sequencerCharacter.toUpperCase()}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSequencer((v) => !v)}
+                  style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.38)", cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 10, padding: "2px 6px" }}
+                  title={showSequencer ? "Colapsar" : "Expandir sequencer"}
+                >
+                  {showSequencer ? "▲" : "▼"}
+                </button>
               </div>
             </div>
 
+            {showSequencer && (<>
             <div
               style={{
                 marginBottom: 10,
@@ -6002,6 +6030,7 @@ export default function Page() {
                 Procesa el track para ver patrones aproximados de cada stem en formato sequencer.
               </div>
             )}
+            </>)}
           </div>
         )}
 
