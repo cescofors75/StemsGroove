@@ -5625,7 +5625,7 @@ export default function Page() {
               letterSpacing: -1,
             }}
           >
-            FOUR-STEM
+            STEM
             <br />
             <span style={{ color: accentColor }}>SEPARATOR</span>
           </h1>
