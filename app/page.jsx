@@ -2820,7 +2820,7 @@ function PatternRow({
 
 // ─── Stem Mixer helpers ───────────────────────────────────────────────────────
 
-function drawMixerWaveform(canvas, mono, color) {
+function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   if (!canvas || !mono?.length) return;
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
@@ -2968,6 +2968,42 @@ function drawMixerWaveform(canvas, mono, color) {
   ctx.beginPath();
   ctx.moveTo(0, midY); ctx.lineTo(W, midY);
   ctx.stroke();
+
+  // ── Layer 5: time grid overlay (optional) ──
+  if (gridOptions?.mixDuration > 0) {
+    const dur = gridOptions.mixDuration;
+    // Pick the smallest "nice" interval that fits without overcrowding (~48px min per step)
+    const niceSteps = [1, 2, 4, 5, 10, 15, 20, 30, 60, 120, 300];
+    const maxLines = Math.floor(W / 48);
+    const stepSec = niceSteps.find(s => Math.floor(dur / s) <= maxLines) ?? 300;
+    ctx.globalAlpha = 1;
+    ctx.font = "8px monospace";
+    for (let sec = stepSec; sec < dur; sec += stepSec) {
+      const x = (sec / dur) * W;
+      const isMinute = sec % 60 < 0.001;
+      ctx.strokeStyle = isMinute ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.13)";
+      ctx.lineWidth = isMinute ? 0.9 : 0.5;
+      ctx.setLineDash(isMinute ? [] : [2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (gridOptions.showLabels !== false) {
+        const m = Math.floor(sec / 60);
+        const s = Math.round(sec % 60);
+        const label = `${m}:${String(s).padStart(2, "0")}`;
+        ctx.save();
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(x - tw / 2 - 2, 2, tw + 4, 12);
+        ctx.fillStyle = isMinute ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.42)";
+        ctx.textAlign = "center";
+        ctx.fillText(label, x, 11);
+        ctx.restore();
+      }
+    }
+  }
 }
 
 function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, accentColor = "#e8c547", t = (k) => k }) {
@@ -2996,6 +3032,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
   const [exportBusy, setExportBusy] = useState(false);
   const [stemPeaks, setStemPeaks] = useState({});
   const [downloadMenu, setDownloadMenu] = useState(null);
+  const [showTimeline, setShowTimeline] = useState(false);
 
   const mixAudioCtxRef = useRef(null);
   const mixBuffersRef = useRef({});
@@ -3116,12 +3153,20 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
 
   useEffect(() => {
     if (!mixReady) return;
-    availableStems.forEach((stem) => {
+    availableStems.forEach((stem, idx) => {
       const canvas = mixCanvasRefs.current[stem.id];
       const mono = mixWaveformDataRef.current[stem.id];
-      if (canvas && mono) drawMixerWaveform(canvas, mono, stem.color);
+      if (!canvas || !mono) return;
+      let grid = null;
+      if (showTimeline && mixDuration > 0) {
+        const isFirst = idx === 0;
+        const isLast = idx === availableStems.length - 1;
+        if (isFirst) grid = { mixDuration, showLabels: true };
+        else if (isLast) grid = { mixDuration, showLabels: false };
+      }
+      drawMixerWaveform(canvas, mono, stem.color, grid);
     });
-  }, [mixReady, availableStems, expandedTrack]);
+  }, [mixReady, availableStems, expandedTrack, showTimeline, mixDuration]);
 
   const mixStopRaf = useCallback(() => {
     if (mixRafRef.current) {
@@ -3754,8 +3799,44 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
                   {exportBusy ? "RENDERIZANDO…" : "↓ EXPORT MIX WAV"}
                 </button>
 
-                {/* All Mute / All Clear */}
-                <div style={{ display: "flex", gap: 5, marginLeft: "auto" }}>
+                {/* All Mute / All Clear + Timeline toggle */}
+                <div style={{ display: "flex", gap: 5, marginLeft: "auto", alignItems: "center" }}>
+                  {/* Timeline checkbox */}
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                      cursor: "pointer",
+                      marginRight: 6,
+                      padding: "0 8px",
+                      height: 28,
+                      borderRadius: 14,
+                      border: `1px solid ${showTimeline ? "rgba(232,197,71,0.55)" : "rgba(255,255,255,0.18)"}`,
+                      background: showTimeline ? "rgba(232,197,71,0.1)" : "rgba(255,255,255,0.03)",
+                      transition: "all 0.18s ease",
+                    }}
+                    title="Mostrar / ocultar línea de tiempo"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showTimeline}
+                      onChange={(e) => setShowTimeline(e.target.checked)}
+                      style={{ accentColor: "#e8c547", cursor: "pointer", width: 11, height: 11 }}
+                    />
+                    <span
+                      style={{
+                        fontFamily: "'Space Mono', monospace",
+                        fontSize: 8,
+                        letterSpacing: 1,
+                        color: showTimeline ? "#e8c547" : "rgba(255,255,255,0.5)",
+                        transition: "color 0.18s ease",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      GRID
+                    </span>
+                  </label>
                   <button
                     type="button"
                     onClick={() => {
