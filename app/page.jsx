@@ -3153,20 +3153,23 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
 
   useEffect(() => {
     if (!mixReady) return;
-    availableStems.forEach((stem, idx) => {
-      const canvas = mixCanvasRefs.current[stem.id];
-      const mono = mixWaveformDataRef.current[stem.id];
-      if (!canvas || !mono) return;
-      let grid = null;
-      if (showTimeline && mixDuration > 0) {
-        const isFirst = idx === 0;
-        const isLast = idx === availableStems.length - 1;
-        if (isFirst) grid = { mixDuration, showLabels: true };
-        else if (isLast) grid = { mixDuration, showLabels: false };
-      }
-      drawMixerWaveform(canvas, mono, stem.color, grid);
+    const raf = requestAnimationFrame(() => {
+      availableStems.forEach((stem, idx) => {
+        const canvas = mixCanvasRefs.current[stem.id];
+        const mono = mixWaveformDataRef.current[stem.id];
+        if (!canvas || !mono) return;
+        let grid = null;
+        if (showTimeline && mixDuration > 0) {
+          const isFirst = idx === 0;
+          const isLast = idx === availableStems.length - 1;
+          if (isFirst) grid = { mixDuration, showLabels: true };
+          else if (isLast) grid = { mixDuration, showLabels: false };
+        }
+        drawMixerWaveform(canvas, mono, stem.color, grid);
+      });
     });
-  }, [mixReady, availableStems, expandedTrack, showTimeline, mixDuration]);
+    return () => cancelAnimationFrame(raf);
+  }, [mixReady, availableStems, expandedTrack, expanded, showTimeline, mixDuration]);
 
   const mixStopRaf = useCallback(() => {
     if (mixRafRef.current) {
