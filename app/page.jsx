@@ -2215,16 +2215,20 @@ function GrooveComparison({ stemUrls }) {
   );
 
   useEffect(() => {
-    const viewStart = rangeStartPct / 100;
-    const viewEnd = rangeEndPct / 100;
-    const onsetResult = drawGrooveComparison(selectedSeries, comparisonCanvasRef.current, activeStemId, viewStart, viewEnd);
-    const deviationResult = drawGrooveDeviationComparison(selectedSeries, deviationCanvasRef.current, activeStemId, viewStart, viewEnd, {
-      showCurve: showTrendCurve,
-      showPoints: showRawPoints,
+    if (collapsed) return;
+    const rafId = requestAnimationFrame(() => {
+      const viewStart = rangeStartPct / 100;
+      const viewEnd = rangeEndPct / 100;
+      const onsetResult = drawGrooveComparison(selectedSeries, comparisonCanvasRef.current, activeStemId, viewStart, viewEnd);
+      const deviationResult = drawGrooveDeviationComparison(selectedSeries, deviationCanvasRef.current, activeStemId, viewStart, viewEnd, {
+        showCurve: showTrendCurve,
+        showPoints: showRawPoints,
+      });
+      onsetPointsRef.current = onsetResult?.points || [];
+      deviationPointsRef.current = deviationResult?.points || [];
     });
-    onsetPointsRef.current = onsetResult?.points || [];
-    deviationPointsRef.current = deviationResult?.points || [];
-  }, [activeStemId, rangeEndPct, rangeStartPct, selectedSeries, showRawPoints, showTrendCurve]);
+    return () => cancelAnimationFrame(rafId);
+  }, [activeStemId, collapsed, rangeEndPct, rangeStartPct, selectedSeries, showRawPoints, showTrendCurve]);
 
   const selectedUseful = selectedSeries.filter((item) => item?.selected && item?.stats?.hasUsefulGroove);
   const activeStem = selectedSeries.find((item) => item?.id === activeStemId && item?.selected && item?.stats?.hasUsefulGroove) || selectedUseful[0] || null;
@@ -5076,6 +5080,10 @@ export default function Page() {
           to { transform: rotate(360deg); }
         }
 
+        @keyframes processSpin {
+          to { transform: rotate(360deg); }
+        }
+
         @keyframes slideIn {
           from {
             opacity: 0;
@@ -5107,6 +5115,84 @@ export default function Page() {
           }
         }
       `}</style>
+
+      {processing && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            background: "rgba(8,9,11,0.94)",
+            borderBottom: `1px solid ${accentColor}55`,
+            backdropFilter: "blur(14px)",
+            padding: "10px 24px",
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+          }}
+        >
+          <div
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: "50%",
+              border: "2.5px solid rgba(232,197,71,0.18)",
+              borderTopColor: accentColor,
+              animation: "processSpin 0.75s linear infinite",
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontFamily: "'Space Mono', monospace",
+                fontSize: 10,
+                letterSpacing: 2,
+                color: accentColor,
+                marginBottom: 5,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {currentStep}
+            </div>
+            <div
+              style={{
+                height: 2,
+                background: "rgba(255,255,255,0.07)",
+                borderRadius: 2,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${progress}%`,
+                  background: accentColor,
+                  borderRadius: 2,
+                  transition: "width 0.3s ease",
+                  boxShadow: `0 0 6px ${accentColor}`,
+                }}
+              />
+            </div>
+          </div>
+          <div
+            style={{
+              fontFamily: "'Space Mono', monospace",
+              fontSize: 11,
+              color: accentColor,
+              flexShrink: 0,
+              minWidth: 36,
+              textAlign: "right",
+            }}
+          >
+            {Math.round(progress)}%
+          </div>
+        </div>
+      )}
 
       <div className="page-container">
         <div style={{ marginBottom: 32 }}>
