@@ -5053,6 +5053,10 @@ export default function Page() {
           to { transform: scaleY(1.08); }
         }
 
+        @keyframes editorSpin {
+          to { transform: rotate(360deg); }
+        }
+
         @keyframes slideIn {
           from {
             opacity: 0;
@@ -5352,79 +5356,37 @@ export default function Page() {
               borderRadius: 14,
               padding: "16px 18px",
               display: "grid",
-              gap: 14,
+              gap: 16,
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            {/* ── Header ── */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <div>
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.68)", marginBottom: 6 }}>
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.68)", marginBottom: 4 }}>
                   MIX EDITOR
                 </div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.42)" }}>
-                  {editorError ? "Editor no disponible para este archivo; el procesado sigue funcionando." : "Trim, fade in/out y preview antes de separar stems."}
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>
+                  {editorError ? "Editor no disponible; el procesado sigue funcionando." : "Trim · fade in/out · preview"}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (isPreviewPlaying) {
-                      pauseStem();
-                    } else {
-                      previewEditedMix();
-                    }
-                  }}
-                  disabled={editorLoading || previewBusy}
-                  style={{
-                    width: 38,
-                    height: 38,
-                    borderRadius: 999,
-                    border: `1px solid ${isPreviewPlaying ? accentColor : "rgba(255,255,255,0.14)"}`,
-                    background: isPreviewPlaying ? accentColor : "rgba(255,255,255,0.03)",
-                    color: isPreviewPlaying ? "#050505" : "rgba(255,255,255,0.82)",
-                    cursor: editorLoading || previewBusy ? "wait" : "pointer",
-                    fontFamily: "'Space Mono', monospace",
-                    fontSize: 12,
-                    boxShadow: isPreviewPlaying ? `0 0 18px rgba(232,197,71,0.22)` : "none",
-                  }}
-                  title={isPreviewPlaying ? "Pausar preview" : "Reproducir preview"}
-                >
-                  {isPreviewPlaying ? "II" : "▶"}
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    restartPreview();
-                  }}
-                  disabled={editorLoading || previewBusy || !editedDuration}
-                  style={{
-                    height: 38,
-                    borderRadius: 999,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    background: "rgba(255,255,255,0.03)",
-                    color: "rgba(255,255,255,0.72)",
-                    cursor: editorLoading || previewBusy ? "wait" : "pointer",
-                    fontFamily: "'Space Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: 1.2,
-                    padding: "0 14px",
-                  }}
-                  title="Volver a empezar la preview"
-                >
-                  RESTART
-                </button>
-              </div>
+              {editorLoading && (
+                <div style={{
+                  width: 18, height: 18, borderRadius: "50%",
+                  border: "2px solid rgba(232,197,71,0.18)",
+                  borderTopColor: accentColor,
+                  animation: "editorSpin 0.7s linear infinite",
+                  flexShrink: 0,
+                }} />
+              )}
             </div>
 
+            {/* ── Waveform ── */}
             <div
               style={{
                 borderRadius: 12,
                 overflow: "hidden",
                 border: "1px solid rgba(255,255,255,0.08)",
                 background: "rgba(255,255,255,0.02)",
-                minHeight: 120,
                 opacity: editorError ? 0.45 : 1,
                 cursor:
                   editorLoading || editorError
@@ -5437,159 +5399,168 @@ export default function Page() {
               <canvas
                 ref={waveformCanvasRef}
                 onPointerDown={beginWaveformDrag}
-                style={{ width: "100%", height: 120, display: "block", touchAction: "none" }}
+                style={{ width: "100%", height: 160, display: "block", touchAction: "none" }}
               />
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.46)" }}>
-              <span style={{ color: accentColor }}>Arrastra el borde izquierdo o derecho sobre la onda para hacer trim.</span>
-              <span>Mueve la zona central para desplazar la selección completa.</span>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", lineHeight: 1.5 }}>
+              Arrastra los bordes para hacer trim · zona central para desplazar la selección.
             </div>
 
+            {/* ── Sliders 2×2 ── */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 24px" }}>
+              {/* TRIM IN */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", letterSpacing: 1 }}>TRIM IN</span>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: accentColor }}>{formatSeconds(trimStart)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, editorDuration - 0.05)}
+                  step={0.01}
+                  value={Math.min(trimStart, Math.max(0, trimEnd - 0.05))}
+                  onChange={(event) => setTrimStart(Math.min(Number(event.target.value), Math.max(0, trimEnd - 0.05)))}
+                  disabled={editorLoading || !editorDuration}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              {/* TRIM OUT */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", letterSpacing: 1 }}>TRIM OUT</span>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: accentColor }}>{formatSeconds(trimEnd || editorDuration)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={Math.min(editorDuration, trimStart + 0.05)}
+                  max={editorDuration || 0}
+                  step={0.01}
+                  value={Math.max(trimEnd || 0, Math.min(editorDuration, trimStart + 0.05))}
+                  onChange={(event) => setTrimEnd(Math.max(Number(event.target.value), Math.min(editorDuration, trimStart + 0.05)))}
+                  disabled={editorLoading || !editorDuration}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              {/* FADE IN */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", letterSpacing: 1 }}>FADE IN</span>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.58)" }}>{fadeInMs} ms</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.round(Math.max(0, (trimEnd - trimStart) * 1000))}
+                  step={10}
+                  value={fadeInMs}
+                  onChange={(event) => setFadeInMs(Number(event.target.value))}
+                  disabled={editorLoading || !editorDuration}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              {/* FADE OUT */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", letterSpacing: 1 }}>FADE OUT</span>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.58)" }}>{fadeOutMs} ms</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.round(Math.max(0, (trimEnd - trimStart) * 1000))}
+                  step={10}
+                  value={fadeOutMs}
+                  onChange={(event) => setFadeOutMs(Number(event.target.value))}
+                  disabled={editorLoading || !editorDuration}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            </div>
+
+            {/* ── Transport ── */}
             <div
               style={{
                 borderRadius: 12,
-                border: "1px solid rgba(232,197,71,0.18)",
-                background: "linear-gradient(180deg, rgba(232,197,71,0.08), rgba(232,197,71,0.02))",
+                border: "1px solid rgba(232,197,71,0.15)",
+                background: "linear-gradient(180deg, rgba(232,197,71,0.06), rgba(232,197,71,0.02))",
                 padding: "12px 14px",
                 display: "grid",
                 gap: 10,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 1.4, color: accentColor }}>
-                  PREVIEW TRANSPORT
-                </div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.66)" }}>
-                  <span>IN {formatSeconds(trimStart)}</span>
-                  <span>OUT {formatSeconds(trimEnd || editorDuration)}</span>
-                  <span>LEN {formatSeconds(editedDuration)}</span>
-                </div>
-              </div>
-
-              <div style={{ position: "relative", height: 10, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    background: "linear-gradient(90deg, rgba(232,197,71,0.18), rgba(232,197,71,0.08))",
+              {/* buttons + time */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (isPreviewPlaying) { pauseStem(); } else { previewEditedMix(); }
                   }}
-                />
-                <div
+                  disabled={editorLoading || previewBusy}
                   style={{
-                    position: "absolute",
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: `${previewProgress}%`,
-                    minWidth: isPreviewPlaying || previewProgress > 0 ? 6 : 0,
-                    borderRadius: 999,
-                    background: "linear-gradient(90deg, #e8c547 0%, #ffd978 100%)",
-                    boxShadow: "0 0 14px rgba(232,197,71,0.45)",
-                    transition: isPreviewPlaying ? "width 0.08s linear" : "width 0.18s ease",
+                    width: 38, height: 38, borderRadius: 999, flexShrink: 0,
+                    border: `1px solid ${isPreviewPlaying ? accentColor : "rgba(255,255,255,0.14)"}`,
+                    background: isPreviewPlaying ? accentColor : "rgba(255,255,255,0.03)",
+                    color: isPreviewPlaying ? "#050505" : "rgba(255,255,255,0.82)",
+                    cursor: editorLoading || previewBusy ? "wait" : "pointer",
+                    fontFamily: "'Space Mono', monospace", fontSize: 12,
+                    boxShadow: isPreviewPlaying ? `0 0 18px rgba(232,197,71,0.22)` : "none",
                   }}
-                />
-                <div
+                  title={isPreviewPlaying ? "Pausar" : "Reproducir preview"}
+                >
+                  {isPreviewPlaying ? "II" : "▶"}
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); restartPreview(); }}
+                  disabled={editorLoading || previewBusy || !editedDuration}
                   style={{
-                    position: "absolute",
-                    top: "50%",
-                    left: `calc(${previewProgress}% - 7px)`,
-                    width: 14,
-                    height: 14,
-                    borderRadius: "50%",
-                    border: "2px solid rgba(8,9,11,0.9)",
-                    background: accentColor,
-                    boxShadow: "0 0 0 3px rgba(232,197,71,0.16), 0 0 14px rgba(232,197,71,0.45)",
-                    transform: "translateY(-50%)",
-                    opacity: previewProgress > 0 || isPreviewPlaying ? 1 : 0,
-                    transition: "left 0.08s linear, opacity 0.18s ease",
+                    height: 38, borderRadius: 999, flexShrink: 0,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(255,255,255,0.03)",
+                    color: "rgba(255,255,255,0.65)",
+                    cursor: editorLoading || previewBusy ? "wait" : "pointer",
+                    fontFamily: "'Space Mono', monospace", fontSize: 10,
+                    letterSpacing: 1.2, padding: "0 14px",
                   }}
-                />
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.48)" }}>
-                <span>{previewBusy ? "Renderizando preview editada..." : isPreviewPlaying ? `Reproduciendo ${formatSeconds(previewOffset)} / ${formatSeconds(editedDuration)}` : "Preview lista para revisar el tramo editado."}</span>
-                <span style={{ color: accentColor, fontFamily: "'Space Mono', monospace" }}>{Math.round(previewProgress)}%</span>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 12 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
-                <div>
-                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>TRIM IN</div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0, editorDuration - 0.05)}
-                    step={0.01}
-                    value={Math.min(trimStart, Math.max(0, trimEnd - 0.05))}
-                    onChange={(event) => setTrimStart(Math.min(Number(event.target.value), Math.max(0, trimEnd - 0.05)))}
-                    disabled={editorLoading || !editorDuration}
-                  />
-                </div>
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: accentColor }}>
-                  {formatSeconds(trimStart)}
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
-                <div>
-                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>TRIM OUT</div>
-                  <input
-                    type="range"
-                    min={Math.min(editorDuration, trimStart + 0.05)}
-                    max={editorDuration || 0}
-                    step={0.01}
-                    value={Math.max(trimEnd || 0, Math.min(editorDuration, trimStart + 0.05))}
-                    onChange={(event) => setTrimEnd(Math.max(Number(event.target.value), Math.min(editorDuration, trimStart + 0.05)))}
-                    disabled={editorLoading || !editorDuration}
-                  />
-                </div>
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: accentColor }}>
-                  {formatSeconds(trimEnd || editorDuration)}
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
-                <div>
-                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>FADE IN</div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.round(Math.max(0, (trimEnd - trimStart) * 1000))}
-                    step={10}
-                    value={fadeInMs}
-                    onChange={(event) => setFadeInMs(Number(event.target.value))}
-                    disabled={editorLoading || !editorDuration}
-                  />
-                </div>
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.58)" }}>
-                  {fadeInMs} ms
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
-                <div>
-                  <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>FADE OUT</div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.round(Math.max(0, (trimEnd - trimStart) * 1000))}
-                    step={10}
-                    value={fadeOutMs}
-                    onChange={(event) => setFadeOutMs(Number(event.target.value))}
-                    disabled={editorLoading || !editorDuration}
-                  />
-                </div>
-                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.58)" }}>
-                  {fadeOutMs} ms
+                  title="Volver al inicio"
+                >
+                  ⏮
+                </button>
+                <div style={{ flex: 1, minWidth: 120 }}>
+                  {/* progress bar */}
+                  <div style={{ position: "relative", height: 8, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden", marginBottom: 6 }}>
+                    <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, rgba(232,197,71,0.15), rgba(232,197,71,0.06))" }} />
+                    <div style={{
+                      position: "absolute", left: 0, top: 0, bottom: 0,
+                      width: `${previewProgress}%`,
+                      minWidth: isPreviewPlaying || previewProgress > 0 ? 5 : 0,
+                      borderRadius: 999,
+                      background: "linear-gradient(90deg, #e8c547, #ffd978)",
+                      boxShadow: "0 0 10px rgba(232,197,71,0.4)",
+                      transition: isPreviewPlaying ? "width 0.08s linear" : "width 0.18s ease",
+                    }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "rgba(255,255,255,0.42)", fontFamily: "'Space Mono', monospace" }}>
+                    <span>{previewBusy ? "Renderizando…" : isPreviewPlaying ? `${formatSeconds(previewOffset)} / ${formatSeconds(editedDuration)}` : `LEN ${formatSeconds(editedDuration)}`}</span>
+                    <span style={{ display: "flex", gap: 10, color: "rgba(255,255,255,0.38)" }}>
+                      <span>IN {formatSeconds(trimStart)}</span>
+                      <span>OUT {formatSeconds(trimEnd || editorDuration)}</span>
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.45)" }}>
-              <span>Duracion original: {formatSeconds(editorDuration)}</span>
-              <span>Duracion editada: {formatSeconds(editedDuration)}</span>
+            {/* ── Footer durations ── */}
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+              <span>Original: {formatSeconds(editorDuration)}</span>
+              <span>Editado: {formatSeconds(editedDuration)}</span>
             </div>
           </div>
         )}
