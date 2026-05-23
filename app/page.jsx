@@ -361,6 +361,24 @@ function estimateBpm(mono, sampleRate) {
   return bpm || 120;
 }
 
+async function estimateBpmFromFile(audioFile) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass || !audioFile) {
+    return null;
+  }
+  const audioContext = new AudioContextClass();
+  try {
+    const audioBuffer = await audioContext.decodeAudioData(await audioFile.arrayBuffer());
+    return Math.round(estimateBpm(mixToMono(audioBuffer), audioBuffer.sampleRate));
+  } finally {
+    await audioContext.close();
+  }
+}
+
+function formatBpm(bpm) {
+  return Number.isFinite(bpm) && bpm > 0 ? `${Math.round(bpm)} BPM` : "BPM --";
+}
+
 function getPatternWindow(totalSeconds, bpm, steps = 16, bars = 1) {
   const beatDuration = 60 / Math.max(1, bpm);
   const barDuration = beatDuration * 4 * bars;
@@ -3009,7 +3027,7 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   }
 }
 
-function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, accentColor = "#e8c547", t = (k) => k }) {
+function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, playbackRates = {}, accentColor = "#e8c547", t = (k) => k }) {
   const [expanded, setExpanded] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [mixReady, setMixReady] = useState(false);
@@ -3056,6 +3074,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
   const mixHasSoloRef = useRef(false);
   const mixPlayingRef = useRef(false);
   const mixPrevUrlsKeyRef = useRef("");
+  const playbackRatesRef = useRef({});
 
   useEffect(() => { mixDurationRef.current = mixDuration; }, [mixDuration]);
   useEffect(() => { mixMutedRef.current = trackMuted; }, [trackMuted]);
@@ -3063,6 +3082,12 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
   useEffect(() => { mixVolsRef.current = trackVols; }, [trackVols]);
   useEffect(() => { mixMasterVolRef.current = masterVol; }, [masterVol]);
   useEffect(() => { mixPlayingRef.current = mixPlaying; }, [mixPlaying]);
+  useEffect(() => { playbackRatesRef.current = playbackRates || {}; }, [playbackRates]);
+
+  const getPlaybackRate = useCallback((stemId) => {
+    const rate = Number(playbackRatesRef.current?.[stemId]);
+    return Number.isFinite(rate) && rate > 0 ? clamp(rate, 0.5, 2) : 1;
+  }, []);
 
   const mixHasSolo = useMemo(() => Object.values(trackSolo).some(Boolean), [trackSolo]);
   useEffect(() => { mixHasSoloRef.current = mixHasSolo; }, [mixHasSolo]);
@@ -3142,7 +3167,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
       setStemPeaks(peaks);
       // eslint-disable-next-line no-console
       console.log("[StemMixer] stem peaks →", Object.entries(peaks).map(([k, v]) => `${k}:${v.toFixed(4)}`).join(" | "));
-      const maxDur = Math.max(...results.map(([, buf]) => buf.duration));
+      const maxDur = Math.max(...results.map(([id, buf]) => buf.duration / getPlaybackRate(id)));
       setMixDuration(maxDur);
       setMixReady(true);
       setMixLoading(false);
@@ -3152,7 +3177,24 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
       setMixError(err.message || "Error al cargar los stems.");
       setMixLoading(false);
     });
-  }, [expanded, availableStems, stemUrls]);
+  }, [expanded, availableStems, stemUrls, getPlaybackRate]);
+
+  useEffect(() => {
+    if (!mixReady) return;
+    const buffers = mixBuffersRef.current;
+    const durations = availableStems
+      .map((stem) => buffers[stem.id]?.duration ? buffers[stem.id].duration / getPlaybackRate(stem.id) : 0)
+      .filter((duration) => duration > 0);
+    if (durations.length) {
+      const nextDuration = Math.max(...durations);
+      setMixDuration(nextDuration);
+      mixDurationRef.current = nextDuration;
+      if (mixPauseOffsetRef.current > nextDuration) {
+        mixPauseOffsetRef.current = 0;
+        setMixTime(0);
+      }
+    }
+  }, [availableStems, getPlaybackRate, mixReady, playbackRates]);
 
   useEffect(() => {
     if (!mixReady) return;
@@ -3284,11 +3326,15 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
     const newSources = {};
     availableStems.forEach((stem) => {
       const buf = mixBuffersRef.current[stem.id];
-      if (!buf || offset >= buf.duration) return;
+      if (!buf) return;
+      const rate = getPlaybackRate(stem.id);
+      const adjustedDuration = buf.duration / rate;
+      if (offset >= adjustedDuration) return;
       const src = ctx.createBufferSource();
       src.buffer = buf;
+      src.playbackRate.value = rate;
       src.connect(mixGainNodesRef.current[stem.id]);
-      src.start(ctx.currentTime, offset);
+      src.start(ctx.currentTime, offset * rate);
       newSources[stem.id] = src;
     });
     // eslint-disable-next-line no-console
@@ -3296,7 +3342,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
     mixSourcesRef.current = newSources;
     setMixPlaying(true);
     mixStartRaf();
-  }, [availableStems, mixApplyGains, mixEnsureNodes, mixReady, mixStartRaf]);
+  }, [availableStems, getPlaybackRate, mixApplyGains, mixEnsureNodes, mixReady, mixStartRaf]);
 
   const handleMixPlay = useCallback(async () => {
     if (mixPlayingRef.current) {
@@ -3373,7 +3419,12 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
       const firstBuf = Object.values(mixBuffersRef.current)[0];
       if (!firstBuf) return;
       const sampleRate = firstBuf.sampleRate;
-      const dur = mixDurationRef.current;
+      const dur = Math.max(
+        ...availableStems.map((stem) => {
+          const buf = mixBuffersRef.current[stem.id];
+          return buf ? buf.duration / getPlaybackRate(stem.id) : 0;
+        }),
+      );
       const hs = mixHasSoloRef.current;
       const offline = new OfflineAudioContext(2, Math.ceil(dur * sampleRate), sampleRate);
       const mg = offline.createGain();
@@ -3386,6 +3437,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
         if (eff) return;
         const src = offline.createBufferSource();
         src.buffer = buf;
+        src.playbackRate.value = getPlaybackRate(stem.id);
         const g = offline.createGain();
         g.gain.value = (mixVolsRef.current[stem.id] ?? 85) / 100;
         src.connect(g);
@@ -3405,7 +3457,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
     } finally {
       setExportBusy(false);
     }
-  }, [availableStems, baseName, exportBusy, mixReady]);
+  }, [availableStems, baseName, exportBusy, getPlaybackRate, mixReady]);
 
   const mixPlayheadPct = mixDuration > 0 ? (mixTime / mixDuration) * 100 : 0;
 
@@ -4303,6 +4355,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   const [currentStep, setCurrentStep] = useState("");
   const [error, setError] = useState("");
   const [stems, setStems] = useState({});
+  const [trackBpm, setTrackBpm] = useState(null);
   const [separateMode, setSeparateMode] = useState("htdemucs_6s");
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubeStatus, setYoutubeStatus] = useState("idle");
@@ -4317,8 +4370,8 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   const baseName = file ? file.name.replace(/\.[^.]+$/, "") : `Track ${trackIdx}`;
 
   useEffect(() => {
-    onStemsChange(trackId, status === "done" ? stems : {}, baseName);
-  }, [status, stems, baseName]);
+    onStemsChange(trackId, status === "done" ? stems : {}, baseName, trackBpm);
+  }, [status, stems, baseName, trackBpm]);
 
   const handleFile = (incoming) => {
     if (!incoming || !ACCEPT_AUDIO.test(incoming.name)) {
@@ -4329,6 +4382,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     setFile(incoming);
     setOriginalUrl(URL.createObjectURL(incoming));
     setStems({});
+    setTrackBpm(null);
     setStatus("idle");
     setProgress(0);
     setError("");
@@ -4381,6 +4435,8 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     }, 380);
 
     try {
+      const detectedBpm = await estimateBpmFromFile(file).catch(() => null);
+      setTrackBpm(detectedBpm);
       const nextStems = await separateTrackViaModal(file, {
         model: separateMode,
         onProgress: ({ progress: p, label }) => {
@@ -4407,6 +4463,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     setStatus("idle");
     setProgress(0);
     setStems({});
+    setTrackBpm(null);
     setError("");
     setCurrentStep("");
   };
@@ -4452,6 +4509,18 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
               }}
             >
               {baseName}
+            </span>
+          )}
+          {trackBpm && (
+            <span
+              style={{
+                marginLeft: 10,
+                color: "rgba(255,255,255,0.42)",
+                fontSize: 10,
+                letterSpacing: 0.5,
+              }}
+            >
+              {formatBpm(trackBpm)}
             </span>
           )}
         </div>
@@ -4790,12 +4859,16 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   );
 }
 
-function GlobalMixer({ tracks, accentColor, t }) {
-  const { stemDefs, stemUrls } = useMemo(() => {
+function GlobalMixer({ tracks, autoMixEnabled = false, targetBpm = null, accentColor, t }) {
+  const { stemDefs, stemUrls, playbackRates } = useMemo(() => {
     const defs = [];
     const urls = {};
+    const rates = {};
     tracks.forEach((track, ti) => {
       const color = TRACK_PALETTE[ti % TRACK_PALETTE.length];
+      const rate = autoMixEnabled && targetBpm && track.bpm
+        ? clamp(targetBpm / track.bpm, 0.5, 2)
+        : 1;
       STEMS.forEach((stemDef) => {
         const url = track.stems[stemDef.id];
         if (!url) return;
@@ -4807,13 +4880,14 @@ function GlobalMixer({ tracks, accentColor, t }) {
           color,
           bg: hexToRgba(color, 0.1),
           border: hexToRgba(color, 0.42),
-          desc: `${track.name} – ${stemDef.desc}`,
+          desc: `${track.name} · ${formatBpm(track.bpm)}${autoMixEnabled && rate !== 1 ? ` · x${rate.toFixed(3)}` : ""}`,
         });
         urls[compositeId] = url;
+        rates[compositeId] = rate;
       });
     });
-    return { stemDefs: defs, stemUrls: urls };
-  }, [tracks]);
+    return { stemDefs: defs, stemUrls: urls, playbackRates: rates };
+  }, [tracks, autoMixEnabled, targetBpm]);
 
   if (stemDefs.length === 0) return null;
 
@@ -4850,6 +4924,8 @@ function GlobalMixer({ tracks, accentColor, t }) {
             }}
           />
           GLOBAL MIXER · {tracks.length} TRACKS
+          {targetBpm ? ` · REF ${formatBpm(targetBpm)}` : ""}
+          {autoMixEnabled ? " · AUTOMIX" : ""}
         </div>
         <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
       </div>
@@ -4858,6 +4934,7 @@ function GlobalMixer({ tracks, accentColor, t }) {
         stemDefs={stemDefs}
         baseName="global_mix"
         onStopOtherPlayback={() => {}}
+        playbackRates={playbackRates}
         accentColor={accentColor}
         t={t}
       />
@@ -4933,6 +5010,7 @@ export default function Page() {
   const [extraTrackIds, setExtraTrackIds] = useState([]);
   const [extraTrackData, setExtraTrackData] = useState({});
   const [mixerView, setMixerView] = useState("separate");
+  const [autoMixEnabled, setAutoMixEnabled] = useState(false);
 
   // ── Locale & Theme ─────────────────────────────────────────────────
   const [locale, setLocale] = useState("en");
@@ -4994,20 +5072,24 @@ export default function Page() {
   const allTracksData = useMemo(() => {
     const result = [];
     if (status === "done" && Object.keys(stems).length > 0) {
-      result.push({ trackId: "primary", name: baseName, stems });
+      result.push({ trackId: "primary", name: baseName, stems, bpm: patternBpm });
     }
     extraTrackIds.forEach((id) => {
       const data = extraTrackData[id];
       if (data && Object.keys(data.stems).length > 0) {
-        result.push({ trackId: id, name: data.name || id, stems: data.stems });
+        result.push({ trackId: id, name: data.name || id, stems: data.stems, bpm: data.bpm });
       }
     });
     return result;
-  }, [status, stems, baseName, extraTrackIds, extraTrackData]);
+  }, [status, stems, baseName, patternBpm, extraTrackIds, extraTrackData]);
 
   const hasMultipleTrackMixes = allTracksData.length >= 2;
   const showSeparateMixers = !hasMultipleTrackMixes || mixerView === "separate";
   const showGlobalMixer = hasMultipleTrackMixes && mixerView === "global";
+  const autoMixTargetBpm = useMemo(() => {
+    const bpms = allTracksData.map((track) => track.bpm).filter((bpm) => Number.isFinite(bpm) && bpm > 0);
+    return bpms.length ? Math.round(bpms[0]) : null;
+  }, [allTracksData]);
 
   const generatedPatterns = useMemo(() => generatePatternSet(patterns, generationSeed), [patterns, generationSeed]);
   const displayedPatterns = patternMode === "generate" ? generatedPatterns : patterns;
@@ -5890,10 +5972,10 @@ export default function Page() {
     });
   }, []);
 
-  const handleExtraStemsChange = useCallback((trackId, trackStems, name) => {
+  const handleExtraStemsChange = useCallback((trackId, trackStems, name, bpm) => {
     setExtraTrackData((prev) => ({
       ...prev,
-      [trackId]: { stems: trackStems, name },
+      [trackId]: { stems: trackStems, name, bpm },
     }));
   }, []);
 
@@ -7604,6 +7686,55 @@ export default function Page() {
                   {view.label}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => setAutoMixEnabled((value) => !value)}
+                style={{
+                  border: `1px solid ${autoMixEnabled ? accentColor : "rgba(255,255,255,0.2)"}`,
+                  color: autoMixEnabled ? accentColor : "rgba(255,255,255,0.65)",
+                  background: autoMixEnabled ? "rgba(232,197,71,0.08)" : "transparent",
+                  borderRadius: 999,
+                  fontSize: 10,
+                  letterSpacing: 1,
+                  padding: "5px 11px",
+                  cursor: "pointer",
+                  fontFamily: "'Space Mono', monospace",
+                }}
+                title="Ajusta la velocidad de cada track al BPM de referencia en el mixer conjunto"
+              >
+                AUTOMIX {autoMixEnabled ? "ON" : "OFF"}
+              </button>
+              <span
+                style={{
+                  fontFamily: "'Space Mono', monospace",
+                  fontSize: 10,
+                  color: "rgba(255,255,255,0.42)",
+                }}
+              >
+                REF {formatBpm(autoMixTargetBpm)}
+              </span>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+                {allTracksData.map((track, index) => {
+                  const rate = autoMixEnabled && autoMixTargetBpm && track.bpm
+                    ? clamp(autoMixTargetBpm / track.bpm, 0.5, 2)
+                    : 1;
+                  return (
+                    <span
+                      key={track.trackId}
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        borderRadius: 999,
+                        padding: "3px 8px",
+                        fontFamily: "'Space Mono', monospace",
+                        fontSize: 9,
+                        color: "rgba(255,255,255,0.52)",
+                      }}
+                    >
+                      T{index + 1} {formatBpm(track.bpm)}{autoMixEnabled && rate !== 1 ? ` x${rate.toFixed(3)}` : ""}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -7611,6 +7742,8 @@ export default function Page() {
           {showGlobalMixer && (
             <GlobalMixer
               tracks={allTracksData}
+              autoMixEnabled={autoMixEnabled}
+              targetBpm={autoMixTargetBpm}
               accentColor={accentColor}
               t={t}
             />
