@@ -61,7 +61,7 @@ def download_youtube(payload: dict):
             if "unavailable" in stderr or "private" in stderr or "not available" in stderr:
                 raise HTTPException(status_code=400, detail="Video no disponible o privado")
             if "age" in stderr or "sign in" in stderr:
-                raise HTTPException(status_code=403, detail="Video con restricción de edad")
+                raise HTTPException(status_code=403, detail="YouTube requiere iniciar sesión o verificar este video")
             if "copyright" in stderr or "blocked" in stderr:
                 raise HTTPException(status_code=403, detail="Video bloqueado por derechos de autor")
             raise HTTPException(status_code=500, detail="Error al descargar el audio")

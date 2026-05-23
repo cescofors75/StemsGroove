@@ -65,6 +65,9 @@ const STEMS = [
 const ACCEPT_AUDIO = /\.(wav|mp3|flac|m4a|webm|aiff?)$/i;
 const MAX_TRIM_WINDOW_SECONDS = 60;
 const MAX_TRIM_WINDOW_TOAST = "Chicos que vale un .002€ cada vez. jajajajja.";
+const SHOW_STEM_PLAYERS = false;
+const SHOW_SEQUENCER_PANEL = false;
+const SHOW_GROOVE_COMPARISON = false;
 
 const STEP_MAP = [
   { max: 10, label: "Loading track" },
@@ -4292,7 +4295,7 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, accentColor, t }) {
+function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = true, accentColor, t }) {
   const [file, setFile] = useState(null);
   const [originalUrl, setOriginalUrl] = useState("");
   const [status, setStatus] = useState("idle");
@@ -4771,7 +4774,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, accentColor, t 
       )}
 
       {/* StemMixer when done */}
-      {ready && Object.keys(stems).length > 0 && (
+      {showMixer && ready && Object.keys(stems).length > 0 && (
         <div style={{ marginTop: 16 }}>
           <StemMixer
             stems={stems}
@@ -4929,6 +4932,7 @@ export default function Page() {
   const [youtubeError, setYoutubeError] = useState("");
   const [extraTrackIds, setExtraTrackIds] = useState([]);
   const [extraTrackData, setExtraTrackData] = useState({});
+  const [mixerView, setMixerView] = useState("separate");
 
   // ── Locale & Theme ─────────────────────────────────────────────────
   const [locale, setLocale] = useState("en");
@@ -5000,6 +5004,10 @@ export default function Page() {
     });
     return result;
   }, [status, stems, baseName, extraTrackIds, extraTrackData]);
+
+  const hasMultipleTrackMixes = allTracksData.length >= 2;
+  const showSeparateMixers = !hasMultipleTrackMixes || mixerView === "separate";
+  const showGlobalMixer = hasMultipleTrackMixes && mixerView === "global";
 
   const generatedPatterns = useMemo(() => generatePatternSet(patterns, generationSeed), [patterns, generationSeed]);
   const displayedPatterns = patternMode === "generate" ? generatedPatterns : patterns;
@@ -7156,25 +7164,27 @@ export default function Page() {
           </div>
         )}
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            marginBottom: 10,
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.68)" }}>
-            STEM PLAYERS
+        {SHOW_STEM_PLAYERS && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 10,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.68)" }}>
+              STEM PLAYERS
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>
+              Estos volúmenes afectan al reproductor de stems, no al secuenciador.
+            </div>
           </div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>
-            Estos volúmenes afectan al reproductor de stems, no al secuenciador.
-          </div>
-        </div>
+        )}
 
-        {ready && Object.keys(stems).length > 0 && (
+        {showSeparateMixers && ready && Object.keys(stems).length > 0 && (
           <StemMixer
             stems={stems}
             stemDefs={visibleStems}
@@ -7185,27 +7195,29 @@ export default function Page() {
           />
         )}
 
-        <div className="stems-grid">
-          {visibleStems.map((stem) => (
-            <StemCard
-              key={stem.id}
-              stem={stem}
-              ready={ready}
-              playing={playing}
-              stemUrl={stems[stem.id]}
-              volume={volumes[stem.id]}
-              onPlay={playStem}
-              onPause={pauseStem}
-              onVolumeChange={setStemVolume}
-              downloadName={`${baseName}_${stem.id}.mp3`}
-              wavDownloadName={`${baseName}_${stem.id}.wav`}
-              onDownloadWav={downloadStemAsWav}
-              wavDownloadBusy={wavDownloadBusyStem === stem.id}
-            />
-          ))}
-        </div>
+        {SHOW_STEM_PLAYERS && (
+          <div className="stems-grid">
+            {visibleStems.map((stem) => (
+              <StemCard
+                key={stem.id}
+                stem={stem}
+                ready={ready}
+                playing={playing}
+                stemUrl={stems[stem.id]}
+                volume={volumes[stem.id]}
+                onPlay={playStem}
+                onPause={pauseStem}
+                onVolumeChange={setStemVolume}
+                downloadName={`${baseName}_${stem.id}.mp3`}
+                wavDownloadName={`${baseName}_${stem.id}.wav`}
+                onDownloadWav={downloadStemAsWav}
+                wavDownloadBusy={wavDownloadBusyStem === stem.id}
+              />
+            ))}
+          </div>
+        )}
 
-        {file && (
+        {SHOW_SEQUENCER_PANEL && file && (
           <div
             style={{
               background: "rgba(255,255,255,0.02)",
@@ -7495,7 +7507,7 @@ export default function Page() {
           </div>
         )}
 
-        {ready && <GrooveComparison stemUrls={stems} />}
+        {SHOW_GROOVE_COMPARISON && ready && <GrooveComparison stemUrls={stems} />}
 
         {/* ── Multi-track section ──────────────────────────────────── */}
         <div style={{ marginTop: 32 }}>
@@ -7506,6 +7518,7 @@ export default function Page() {
               trackIdx={idx + 2}
               onStemsChange={handleExtraStemsChange}
               onRemove={removeExtraTrack}
+              showMixer={showSeparateMixers}
               accentColor={accentColor}
               t={t}
             />
@@ -7546,8 +7559,56 @@ export default function Page() {
             />
           </div>
 
-          {/* Global mixer — only when 2+ tracks have stems */}
-          {allTracksData.length >= 2 && (
+          {hasMultipleTrackMixes && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                marginTop: 18,
+                marginBottom: showGlobalMixer ? 0 : 18,
+                flexWrap: "wrap",
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: "'Space Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: 1.5,
+                  color: "rgba(255,255,255,0.42)",
+                }}
+              >
+                MIXER VIEW
+              </span>
+              {[
+                { id: "separate", label: "POR TRACK" },
+                { id: "global", label: "CONJUNTO" },
+              ].map((view) => (
+                <button
+                  key={view.id}
+                  type="button"
+                  onClick={() => setMixerView(view.id)}
+                  style={{
+                    border: `1px solid ${mixerView === view.id ? accentColor : "rgba(255,255,255,0.2)"}`,
+                    color: mixerView === view.id ? accentColor : "rgba(255,255,255,0.65)",
+                    background: "transparent",
+                    borderRadius: 999,
+                    fontSize: 10,
+                    letterSpacing: 1,
+                    padding: "5px 11px",
+                    cursor: "pointer",
+                    fontFamily: "'Space Mono', monospace",
+                  }}
+                >
+                  {view.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Global mixer — only when selected and 2+ tracks have stems */}
+          {showGlobalMixer && (
             <GlobalMixer
               tracks={allTracksData}
               accentColor={accentColor}

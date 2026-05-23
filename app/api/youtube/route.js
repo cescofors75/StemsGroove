@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import ytdl from "@distube/ytdl-core";
 
 export const maxDuration = 300;
+export const runtime = "nodejs";
 
 const YT_REGEX =
   /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?.*v=|shorts\/|live\/)|youtu\.be\/)[\w-]+/;
@@ -20,15 +21,18 @@ function sanitizeFilename(name) {
 // Derive Modal YouTube endpoint from the existing separation URL.
 // Modal naming: https://{user}--demucs-separator-separate.modal.run
 //            → https://{user}--demucs-separator-download-youtube.modal.run
-function getModalYoutubeUrl() {
+function getModalYoutubeConfig() {
   const explicit =
     process.env.MODAL_YOUTUBE_URL ||
     process.env.NEXT_PUBLIC_MODAL_YOUTUBE_URL;
-  if (explicit) return explicit;
+  if (explicit) return { url: explicit, explicit: true };
 
   const separateUrl = process.env.NEXT_PUBLIC_MODAL_SEPARATE_URL || "";
   if (separateUrl.includes("-separate.modal.run")) {
-    return separateUrl.replace("-separate.modal.run", "-download-youtube.modal.run");
+    return {
+      url: separateUrl.replace("-separate.modal.run", "-download-youtube.modal.run"),
+      explicit: false,
+    };
   }
   return null;
 }
@@ -41,7 +45,9 @@ async function downloadViaModal(youtubeUrl, modalUrl) {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail || `Modal error ${res.status}`);
+    const error = new Error(data.detail || `Modal error ${res.status}`);
+    error.status = res.status;
+    throw error;
   }
   const { audio, filename } = await res.json();
   const buffer = Buffer.from(audio, "base64");
@@ -93,11 +99,19 @@ export async function POST(request) {
       );
     }
 
-    const modalUrl = getModalYoutubeUrl();
+    const modalConfig = getModalYoutubeConfig();
     let buffer, filename, mimeType;
 
-    if (modalUrl) {
-      ({ buffer, filename, mimeType } = await downloadViaModal(url, modalUrl));
+    if (modalConfig) {
+      try {
+        ({ buffer, filename, mimeType } = await downloadViaModal(url, modalConfig.url));
+      } catch (err) {
+        if (modalConfig.explicit || err?.status !== 404) {
+          throw err;
+        }
+        console.warn("Modal YouTube endpoint not found; falling back to local ytdl-core");
+        ({ buffer, filename, mimeType } = await downloadViaYtdlCore(url));
+      }
     } else {
       ({ buffer, filename, mimeType } = await downloadViaYtdlCore(url));
     }
@@ -112,17 +126,34 @@ export async function POST(request) {
   } catch (err) {
     const msg = String(err?.message || "");
     let userError = "Error al descargar el audio de YouTube";
+    let status = 502;
     if (
       msg.includes("privado") ||
       msg.includes("unavailable") ||
       msg.includes("not available")
     ) {
       userError = "Video no disponible o privado";
-    } else if (msg.includes("edad") || msg.includes("age") || msg.includes("sign in")) {
-      userError = "Video con restricción de edad";
+      status = 404;
+    } else if (
+      msg.includes("edad") ||
+      msg.includes("age") ||
+      msg.includes("sign in") ||
+      msg.includes("iniciar sesión")
+    ) {
+      userError = "YouTube requiere iniciar sesión o verificar este video";
+      status = 403;
     } else if (msg.includes("copyright") || msg.includes("blocked")) {
       userError = "Video bloqueado por derechos de autor";
+      status = 403;
     }
-    return NextResponse.json({ error: userError }, { status: 500 });
+
+    console.error("YouTube download failed", err);
+    return NextResponse.json(
+      {
+        error: userError,
+        detail: process.env.NODE_ENV === "development" ? msg : undefined,
+      },
+      { status }
+    );
   }
 }
