@@ -70,6 +70,10 @@ textarea {
 .row-flash-solo  { animation: rowFlashGold  0.6s  ease-out forwards; }
 .row-flash-clear { animation: rowFlashWhite 0.5s  ease-out forwards; }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 a {
   color: inherit;
 }

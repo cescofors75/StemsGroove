@@ -4343,6 +4343,9 @@ export default function Page() {
   const trimToastTimerRef = useRef(null);
   const stemWavUrlCacheRef = useRef({});
   const [wavDownloadBusyStem, setWavDownloadBusyStem] = useState("");
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [youtubeStatus, setYoutubeStatus] = useState("idle");
+  const [youtubeError, setYoutubeError] = useState("");
 
   // ── Locale & Theme ─────────────────────────────────────────────────
   const [locale, setLocale] = useState("en");
@@ -5241,6 +5244,33 @@ export default function Page() {
     }
   };
 
+  const handleYoutubeDownload = async () => {
+    const urlTrimmed = youtubeUrl.trim();
+    if (!urlTrimmed || youtubeStatus === "loading") return;
+    setYoutubeStatus("loading");
+    setYoutubeError("");
+    try {
+      const res = await fetch("/api/youtube", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlTrimmed }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Error al descargar de YouTube");
+      }
+      const filename = res.headers.get("X-Filename") || "youtube_audio.mp3";
+      const blob = await res.blob();
+      const audioFile = new File([blob], filename, { type: "audio/mpeg" });
+      setYoutubeStatus("idle");
+      setYoutubeUrl("");
+      handleFile(audioFile);
+    } catch (err) {
+      setYoutubeStatus("error");
+      setYoutubeError(err.message || "Error al descargar de YouTube");
+    }
+  };
+
   const processTrack = async () => {
     if (!file) {
       return;
@@ -5934,6 +5964,164 @@ export default function Page() {
             </>
           )}
         </div>
+
+        {!file && (
+          <div style={{ marginBottom: 22 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 10,
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  height: 1,
+                  background: "rgba(255,255,255,0.07)",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: 10,
+                  fontFamily: "'Space Mono', monospace",
+                  color: "rgba(255,255,255,0.28)",
+                  letterSpacing: 1.5,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("youtube_or_link")}
+              </span>
+              <div
+                style={{
+                  flex: 1,
+                  height: 1,
+                  background: "rgba(255,255,255,0.07)",
+                }}
+              />
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                background: "rgba(255,40,40,0.04)",
+                border: `1px solid ${youtubeStatus === "error" ? "rgba(255,80,80,0.4)" : "rgba(255,80,80,0.14)"}`,
+                borderRadius: 12,
+                padding: "8px 10px 8px 14px",
+                transition: "border-color 0.2s",
+              }}
+            >
+              <svg
+                width="22"
+                height="16"
+                viewBox="0 0 22 16"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                style={{ flexShrink: 0 }}
+              >
+                <rect
+                  width="22"
+                  height="16"
+                  rx="3.5"
+                  fill="#FF0000"
+                  fillOpacity="0.85"
+                />
+                <polygon points="9,4 9,12 16,8" fill="white" />
+              </svg>
+
+              <input
+                type="url"
+                value={youtubeUrl}
+                onChange={(e) => {
+                  setYoutubeUrl(e.target.value);
+                  if (youtubeError) setYoutubeError("");
+                  if (youtubeStatus === "error") setYoutubeStatus("idle");
+                }}
+                onKeyDown={(e) => e.key === "Enter" && handleYoutubeDownload()}
+                placeholder={t("youtube_placeholder")}
+                disabled={youtubeStatus === "loading"}
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  color: "rgba(255,255,255,0.82)",
+                  fontSize: 12,
+                  fontFamily: "'Space Mono', monospace",
+                  letterSpacing: 0.3,
+                  minWidth: 0,
+                  opacity: youtubeStatus === "loading" ? 0.5 : 1,
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={handleYoutubeDownload}
+                disabled={!youtubeUrl.trim() || youtubeStatus === "loading"}
+                style={{
+                  background:
+                    youtubeStatus === "loading"
+                      ? "rgba(255,80,80,0.25)"
+                      : "rgba(255,80,80,0.16)",
+                  border: "1px solid rgba(255,80,80,0.32)",
+                  color:
+                    !youtubeUrl.trim() || youtubeStatus === "loading"
+                      ? "rgba(255,255,255,0.35)"
+                      : "rgba(255,255,255,0.85)",
+                  padding: "7px 14px",
+                  borderRadius: 8,
+                  cursor:
+                    !youtubeUrl.trim() || youtubeStatus === "loading"
+                      ? "not-allowed"
+                      : "pointer",
+                  fontSize: 10,
+                  fontFamily: "'Space Mono', monospace",
+                  letterSpacing: 1,
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                  transition: "all 0.2s",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                {youtubeStatus === "loading" && (
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 10,
+                      height: 10,
+                      border: "1.5px solid rgba(255,255,255,0.5)",
+                      borderTopColor: "rgba(255,255,255,0.9)",
+                      borderRadius: "50%",
+                      animation: "spin 0.7s linear infinite",
+                    }}
+                  />
+                )}
+                {youtubeStatus === "loading"
+                  ? t("youtube_downloading")
+                  : t("youtube_download_btn")}
+              </button>
+            </div>
+
+            {youtubeError && (
+              <div
+                style={{
+                  marginTop: 7,
+                  fontSize: 11,
+                  color: "rgba(255,100,100,0.9)",
+                  fontFamily: "'Space Mono', monospace",
+                  letterSpacing: 0.3,
+                }}
+              >
+                {youtubeError}
+              </div>
+            )}
+          </div>
+        )}
 
         {error && (
           <div
