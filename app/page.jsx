@@ -4283,6 +4283,587 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, a
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+const TRACK_PALETTE = ["#e8c547", "#5aa3e8", "#56d364", "#e88f5a", "#c45ae8", "#e8605a"];
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, accentColor, t }) {
+  const [file, setFile] = useState(null);
+  const [originalUrl, setOriginalUrl] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [progress, setProgress] = useState(0);
+  const [currentStep, setCurrentStep] = useState("");
+  const [error, setError] = useState("");
+  const [stems, setStems] = useState({});
+  const [separateMode, setSeparateMode] = useState("htdemucs_6s");
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [youtubeStatus, setYoutubeStatus] = useState("idle");
+  const [youtubeError, setYoutubeError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef(null);
+
+  const visibleStems = separateMode === "htdemucs_6s"
+    ? STEMS
+    : STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano");
+
+  const baseName = file ? file.name.replace(/\.[^.]+$/, "") : `Track ${trackIdx}`;
+
+  useEffect(() => {
+    onStemsChange(trackId, status === "done" ? stems : {}, baseName);
+  }, [status, stems, baseName]);
+
+  const handleFile = (incoming) => {
+    if (!incoming || !ACCEPT_AUDIO.test(incoming.name)) {
+      setError("Formato no soportado. Usa WAV, MP3, FLAC o AIFF.");
+      return;
+    }
+    if (originalUrl) URL.revokeObjectURL(originalUrl);
+    setFile(incoming);
+    setOriginalUrl(URL.createObjectURL(incoming));
+    setStems({});
+    setStatus("idle");
+    setProgress(0);
+    setError("");
+    setCurrentStep("");
+  };
+
+  const handleYoutubeDownload = async () => {
+    const urlTrimmed = youtubeUrl.trim();
+    if (!urlTrimmed || youtubeStatus === "loading") return;
+    setYoutubeStatus("loading");
+    setYoutubeError("");
+    try {
+      const res = await fetch("/api/youtube", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlTrimmed }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Error al descargar de YouTube");
+      }
+      const filename = res.headers.get("X-Filename") || "youtube_audio.mp3";
+      const blob = await res.blob();
+      const audioFile = new File([blob], filename, { type: "audio/mpeg" });
+      setYoutubeStatus("idle");
+      setYoutubeUrl("");
+      handleFile(audioFile);
+    } catch (err) {
+      setYoutubeStatus("error");
+      setYoutubeError(err.message || "Error al descargar de YouTube");
+    }
+  };
+
+  const processTrack = async () => {
+    if (!file || status === "processing") return;
+    setError("");
+    setStatus("processing");
+    setProgress(3);
+    setCurrentStep(getStepLabel(3));
+
+    let ghostProgress = 3;
+    let ticks = 0;
+    const ticker = setInterval(() => {
+      ticks += 1;
+      const cap = ticks < 30 ? 96 : 99;
+      const step = ghostProgress < 60 ? 4 : ghostProgress < 88 ? 2 : 0.6;
+      ghostProgress = Math.min(cap, ghostProgress + step);
+      setProgress(ghostProgress);
+      setCurrentStep(getStepLabel(ghostProgress));
+    }, 380);
+
+    try {
+      const nextStems = await separateTrackViaModal(file, {
+        model: separateMode,
+        onProgress: ({ progress: p, label }) => {
+          if (Number.isFinite(p)) setProgress(Math.max(3, Math.min(96, Math.round(p))));
+          if (label) setCurrentStep(label);
+        },
+      });
+      setStems(nextStems || {});
+      setProgress(100);
+      setCurrentStep("Stems ready");
+      setStatus("done");
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Error desconocido");
+    } finally {
+      clearInterval(ticker);
+    }
+  };
+
+  const clearTrack = () => {
+    if (originalUrl) URL.revokeObjectURL(originalUrl);
+    setFile(null);
+    setOriginalUrl("");
+    setStatus("idle");
+    setProgress(0);
+    setStems({});
+    setError("");
+    setCurrentStep("");
+  };
+
+  const ready = status === "done";
+  const processing = status === "processing";
+
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.02)",
+        border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: 16,
+        padding: "20px 24px",
+        marginBottom: 16,
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 16,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "'Space Mono', monospace",
+            fontSize: 11,
+            letterSpacing: 2,
+            color: "rgba(255,255,255,0.55)",
+          }}
+        >
+          TRACK {trackIdx}
+          {file && (
+            <span
+              style={{
+                marginLeft: 10,
+                color: accentColor,
+                fontSize: 10,
+                letterSpacing: 0.5,
+              }}
+            >
+              {baseName}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            clearTrack();
+            onRemove(trackId);
+          }}
+          style={{
+            background: "none",
+            border: "1px solid rgba(255,255,255,0.1)",
+            color: "rgba(255,255,255,0.38)",
+            padding: "4px 10px",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 10,
+            fontFamily: "'Space Mono', monospace",
+            letterSpacing: 0.5,
+          }}
+        >
+          ✕ ELIMINAR
+        </button>
+      </div>
+
+      {/* Upload zone (when no file) */}
+      {!file && !processing && (
+        <>
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
+            onClick={() => fileRef.current?.click()}
+            style={{
+              border: `1.5px dashed ${dragging ? accentColor : "rgba(255,255,255,0.1)"}`,
+              borderRadius: 12,
+              padding: "22px 20px",
+              textAlign: "center",
+              cursor: "pointer",
+              background: dragging ? "rgba(232,197,71,0.04)" : "rgba(255,255,255,0.01)",
+              marginBottom: 10,
+              transition: "all 0.2s",
+            }}
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".wav,.mp3,.flac,.aif,.aiff"
+              style={{ display: "none" }}
+              onChange={(e) => handleFile(e.target.files[0])}
+            />
+            <div
+              style={{
+                fontSize: 11,
+                fontFamily: "'Space Mono', monospace",
+                color: "rgba(255,255,255,0.38)",
+                letterSpacing: 1,
+              }}
+            >
+              ARRASTRA O HAGA CLIC PARA SUBIR AUDIO
+            </div>
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 4 }}>
+              WAV / MP3 / FLAC / AIFF
+            </div>
+          </div>
+
+          {/* YouTube URL */}
+          <div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                background: "rgba(255,40,40,0.04)",
+                border: `1px solid ${youtubeStatus === "error" ? "rgba(255,80,80,0.4)" : "rgba(255,80,80,0.14)"}`,
+                borderRadius: 10,
+                padding: "7px 10px 7px 12px",
+                transition: "border-color 0.2s",
+              }}
+            >
+              <svg width="20" height="14" viewBox="0 0 22 16" fill="none" style={{ flexShrink: 0 }}>
+                <rect width="22" height="16" rx="3.5" fill="#FF0000" fillOpacity="0.85" />
+                <polygon points="9,4 9,12 16,8" fill="white" />
+              </svg>
+              <input
+                type="url"
+                value={youtubeUrl}
+                onChange={(e) => {
+                  setYoutubeUrl(e.target.value);
+                  if (youtubeError) setYoutubeError("");
+                  if (youtubeStatus === "error") setYoutubeStatus("idle");
+                }}
+                onKeyDown={(e) => e.key === "Enter" && handleYoutubeDownload()}
+                placeholder="https://youtube.com/watch?v=..."
+                disabled={youtubeStatus === "loading"}
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  color: "rgba(255,255,255,0.82)",
+                  fontSize: 11,
+                  fontFamily: "'Space Mono', monospace",
+                  minWidth: 0,
+                  opacity: youtubeStatus === "loading" ? 0.5 : 1,
+                }}
+              />
+              <button
+                type="button"
+                onClick={handleYoutubeDownload}
+                disabled={!youtubeUrl.trim() || youtubeStatus === "loading"}
+                style={{
+                  background: "rgba(255,80,80,0.16)",
+                  border: "1px solid rgba(255,80,80,0.32)",
+                  color: !youtubeUrl.trim() || youtubeStatus === "loading"
+                    ? "rgba(255,255,255,0.3)"
+                    : "rgba(255,255,255,0.85)",
+                  padding: "5px 12px",
+                  borderRadius: 7,
+                  cursor: !youtubeUrl.trim() || youtubeStatus === "loading" ? "not-allowed" : "pointer",
+                  fontSize: 10,
+                  fontFamily: "'Space Mono', monospace",
+                  letterSpacing: 1,
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                }}
+              >
+                {youtubeStatus === "loading" && (
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 9,
+                      height: 9,
+                      border: "1.5px solid rgba(255,255,255,0.4)",
+                      borderTopColor: "rgba(255,255,255,0.9)",
+                      borderRadius: "50%",
+                      animation: "spin 0.7s linear infinite",
+                    }}
+                  />
+                )}
+                {youtubeStatus === "loading" ? "DESCARGANDO..." : "DESCARGAR"}
+              </button>
+            </div>
+            {youtubeError && (
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 11,
+                  color: "rgba(255,100,100,0.9)",
+                  fontFamily: "'Space Mono', monospace",
+                }}
+              >
+                {youtubeError}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* File loaded, ready to process */}
+      {file && !ready && !processing && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontFamily: "'Space Mono', monospace",
+                fontSize: 12,
+                color: "#fff",
+                fontWeight: 700,
+                wordBreak: "break-all",
+              }}
+            >
+              {file.name}
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginTop: 2 }}>
+              {(file.size / 1024 / 1024).toFixed(2)} MB
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+            {[
+              { id: "htdemucs_6s", label: "6S", hint: "6 stems" },
+              { id: "htdemucs", label: "4S", hint: "4 stems" },
+            ].map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => setSeparateMode(mode.id)}
+                title={mode.hint}
+                style={{
+                  border: `1px solid ${separateMode === mode.id ? accentColor : "rgba(255,255,255,0.2)"}`,
+                  color: separateMode === mode.id ? accentColor : "rgba(255,255,255,0.7)",
+                  background: "transparent",
+                  borderRadius: 999,
+                  fontSize: 10,
+                  letterSpacing: 1,
+                  padding: "4px 9px",
+                  cursor: "pointer",
+                  fontFamily: "'Space Mono', monospace",
+                }}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={processTrack}
+            style={{
+              background: accentColor,
+              border: "none",
+              color: "#050505",
+              padding: "8px 18px",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontSize: 11,
+              fontFamily: "'Space Mono', monospace",
+              fontWeight: 700,
+              letterSpacing: 1,
+              flexShrink: 0,
+            }}
+          >
+            SEPARAR STEMS
+          </button>
+          <button
+            type="button"
+            onClick={clearTrack}
+            style={{
+              background: "none",
+              border: "1px solid rgba(255,255,255,0.14)",
+              color: "rgba(255,255,255,0.5)",
+              padding: "8px 12px",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontSize: 11,
+              fontFamily: "'Space Mono', monospace",
+              flexShrink: 0,
+            }}
+          >
+            {t("clear")}
+          </button>
+        </div>
+      )}
+
+      {/* Processing indicator */}
+      {processing && (
+        <div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: 6,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: "'Space Mono', monospace",
+                fontSize: 11,
+                color: "rgba(255,255,255,0.55)",
+              }}
+            >
+              {currentStep || "Procesando..."}
+            </span>
+            <span
+              style={{
+                fontFamily: "'Space Mono', monospace",
+                fontSize: 11,
+                color: accentColor,
+              }}
+            >
+              {Math.round(progress)}%
+            </span>
+          </div>
+          <div
+            style={{
+              background: "rgba(255,255,255,0.08)",
+              borderRadius: 4,
+              height: 4,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                background: accentColor,
+                height: "100%",
+                width: `${progress}%`,
+                transition: "width 0.4s ease",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div
+          style={{
+            marginTop: 10,
+            border: "1px solid rgba(232,84,71,0.45)",
+            background: "rgba(232,84,71,0.08)",
+            borderRadius: 10,
+            padding: "8px 12px",
+            fontSize: 12,
+            color: "rgba(255,255,255,0.8)",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {/* StemMixer when done */}
+      {ready && Object.keys(stems).length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <StemMixer
+            stems={stems}
+            stemDefs={visibleStems}
+            baseName={baseName}
+            onStopOtherPlayback={() => {}}
+            accentColor={accentColor}
+            t={t}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GlobalMixer({ tracks, accentColor, t }) {
+  const { stemDefs, stemUrls } = useMemo(() => {
+    const defs = [];
+    const urls = {};
+    tracks.forEach((track, ti) => {
+      const color = TRACK_PALETTE[ti % TRACK_PALETTE.length];
+      STEMS.forEach((stemDef) => {
+        const url = track.stems[stemDef.id];
+        if (!url) return;
+        const compositeId = `${track.trackId}_${stemDef.id}`;
+        defs.push({
+          id: compositeId,
+          label: `T${ti + 1} · ${stemDef.label}`,
+          icon: stemDef.icon,
+          color,
+          bg: hexToRgba(color, 0.1),
+          border: hexToRgba(color, 0.42),
+          desc: `${track.name} – ${stemDef.desc}`,
+        });
+        urls[compositeId] = url;
+      });
+    });
+    return { stemDefs: defs, stemUrls: urls };
+  }, [tracks]);
+
+  if (stemDefs.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 28, marginBottom: 24 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          marginBottom: 18,
+        }}
+      >
+        <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
+        <div
+          style={{
+            fontFamily: "'Space Mono', monospace",
+            fontSize: 11,
+            letterSpacing: 2,
+            color: "rgba(255,255,255,0.55)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span
+            style={{
+              display: "inline-block",
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: accentColor,
+              boxShadow: `0 0 6px ${accentColor}`,
+            }}
+          />
+          GLOBAL MIXER · {tracks.length} TRACKS
+        </div>
+        <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
+      </div>
+      <StemMixer
+        stems={stemUrls}
+        stemDefs={stemDefs}
+        baseName="global_mix"
+        onStopOtherPlayback={() => {}}
+        accentColor={accentColor}
+        t={t}
+      />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function Page() {
   const [file, setFile] = useState(null);
   const [originalUrl, setOriginalUrl] = useState("");
@@ -4346,6 +4927,8 @@ export default function Page() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubeStatus, setYoutubeStatus] = useState("idle");
   const [youtubeError, setYoutubeError] = useState("");
+  const [extraTrackIds, setExtraTrackIds] = useState([]);
+  const [extraTrackData, setExtraTrackData] = useState({});
 
   // ── Locale & Theme ─────────────────────────────────────────────────
   const [locale, setLocale] = useState("en");
@@ -4403,6 +4986,20 @@ export default function Page() {
     }
     return file.name.replace(/\.[^.]+$/, "");
   }, [file]);
+
+  const allTracksData = useMemo(() => {
+    const result = [];
+    if (status === "done" && Object.keys(stems).length > 0) {
+      result.push({ trackId: "primary", name: baseName, stems });
+    }
+    extraTrackIds.forEach((id) => {
+      const data = extraTrackData[id];
+      if (data && Object.keys(data.stems).length > 0) {
+        result.push({ trackId: id, name: data.name || id, stems: data.stems });
+      }
+    });
+    return result;
+  }, [status, stems, baseName, extraTrackIds, extraTrackData]);
 
   const generatedPatterns = useMemo(() => generatePatternSet(patterns, generationSeed), [patterns, generationSeed]);
   const displayedPatterns = patternMode === "generate" ? generatedPatterns : patterns;
@@ -5270,6 +5867,27 @@ export default function Page() {
       setYoutubeError(err.message || "Error al descargar de YouTube");
     }
   };
+
+  const addExtraTrack = () => {
+    const id = `extra-${Date.now()}`;
+    setExtraTrackIds((prev) => [...prev, id]);
+  };
+
+  const removeExtraTrack = useCallback((id) => {
+    setExtraTrackIds((prev) => prev.filter((t) => t !== id));
+    setExtraTrackData((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  const handleExtraStemsChange = useCallback((trackId, trackStems, name) => {
+    setExtraTrackData((prev) => ({
+      ...prev,
+      [trackId]: { stems: trackStems, name },
+    }));
+  }, []);
 
   const processTrack = async () => {
     if (!file) {
@@ -6878,6 +7496,65 @@ export default function Page() {
         )}
 
         {ready && <GrooveComparison stemUrls={stems} />}
+
+        {/* ── Multi-track section ──────────────────────────────────── */}
+        <div style={{ marginTop: 32 }}>
+          {extraTrackIds.map((id, idx) => (
+            <TrackSlot
+              key={id}
+              trackId={id}
+              trackIdx={idx + 2}
+              onStemsChange={handleExtraStemsChange}
+              onRemove={removeExtraTrack}
+              accentColor={accentColor}
+              t={t}
+            />
+          ))}
+
+          {/* Add Track button */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              marginBottom: allTracksData.length >= 2 ? 0 : 16,
+            }}
+          >
+            <div
+              style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }}
+            />
+            <button
+              type="button"
+              onClick={addExtraTrack}
+              style={{
+                background: "none",
+                border: "1px solid rgba(255,255,255,0.18)",
+                color: "rgba(255,255,255,0.55)",
+                padding: "7px 20px",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontSize: 10,
+                fontFamily: "'Space Mono', monospace",
+                letterSpacing: 1.5,
+                transition: "all 0.2s",
+              }}
+            >
+              + AÑADIR TRACK
+            </button>
+            <div
+              style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }}
+            />
+          </div>
+
+          {/* Global mixer — only when 2+ tracks have stems */}
+          {allTracksData.length >= 2 && (
+            <GlobalMixer
+              tracks={allTracksData}
+              accentColor={accentColor}
+              t={t}
+            />
+          )}
+        </div>
 
       </div>
     </div>
