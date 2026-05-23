@@ -14,8 +14,71 @@ image = (
     )
 )
 
+# Imagen ligera para descarga de YouTube (sin torch/demucs)
+youtube_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg")
+    .pip_install("yt-dlp", "fastapi[standard]")
+)
+
 # Cache de modelos entre cold starts
 model_cache = modal.Volume.from_name("demucs-cache", create_if_missing=True)
+
+
+@app.function(
+    image=youtube_image,
+    cpu=1.0,
+    memory=1024,
+    max_containers=5,
+    timeout=120,
+)
+@modal.fastapi_endpoint(method="POST", docs=True)
+def download_youtube(payload: dict):
+    import base64
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    from fastapi import HTTPException
+
+    url = (payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Falta el campo 'url'")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        cmd = [
+            "yt-dlp",
+            "-x", "--audio-format", "mp3", "--audio-quality", "0",
+            "--no-playlist", "--max-filesize", "150m",
+            "--socket-timeout", "30", "--no-warnings",
+            "-o", str(tmp_path / "%(title).100B.%(ext)s"),
+            url,
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=100)
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or exc.stdout or "").lower()
+            if "unavailable" in stderr or "private" in stderr or "not available" in stderr:
+                raise HTTPException(status_code=400, detail="Video no disponible o privado")
+            if "age" in stderr or "sign in" in stderr:
+                raise HTTPException(status_code=403, detail="Video con restricción de edad")
+            if "copyright" in stderr or "blocked" in stderr:
+                raise HTTPException(status_code=403, detail="Video bloqueado por derechos de autor")
+            raise HTTPException(status_code=500, detail="Error al descargar el audio")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=500, detail="La descarga tardó demasiado")
+
+        mp3_files = list(tmp_path.glob("*.mp3"))
+        if not mp3_files:
+            raise HTTPException(status_code=500, detail="No se pudo extraer el audio MP3")
+
+        mp3 = mp3_files[0]
+        audio_b64 = base64.b64encode(mp3.read_bytes()).decode()
+        return {
+            "audio": audio_b64,
+            "filename": mp3.name,
+            "content_type": "audio/mpeg",
+        }
 
 
 @app.function(

@@ -17,12 +17,68 @@ function sanitizeFilename(name) {
   );
 }
 
+// Derive Modal YouTube endpoint from the existing separation URL.
+// Modal naming: https://{user}--demucs-separator-separate.modal.run
+//            → https://{user}--demucs-separator-download-youtube.modal.run
+function getModalYoutubeUrl() {
+  const explicit =
+    process.env.MODAL_YOUTUBE_URL ||
+    process.env.NEXT_PUBLIC_MODAL_YOUTUBE_URL;
+  if (explicit) return explicit;
+
+  const separateUrl = process.env.NEXT_PUBLIC_MODAL_SEPARATE_URL || "";
+  if (separateUrl.includes("-separate.modal.run")) {
+    return separateUrl.replace("-separate.modal.run", "-download-youtube.modal.run");
+  }
+  return null;
+}
+
+async function downloadViaModal(youtubeUrl, modalUrl) {
+  const res = await fetch(modalUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: youtubeUrl }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Modal error ${res.status}`);
+  }
+  const { audio, filename } = await res.json();
+  const buffer = Buffer.from(audio, "base64");
+  return { buffer, filename, mimeType: "audio/mpeg" };
+}
+
 async function streamToBuffer(stream) {
   const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-  }
+  for await (const chunk of stream) chunks.push(chunk);
   return Buffer.concat(chunks);
+}
+
+async function downloadViaYtdlCore(youtubeUrl) {
+  if (!ytdl.validateURL(youtubeUrl)) throw new Error("URL no válida");
+  const info = await ytdl.getInfo(youtubeUrl);
+  const title = sanitizeFilename(info.videoDetails.title);
+
+  let format, ext, mimeType;
+  try {
+    format = ytdl.chooseFormat(info.formats, {
+      filter: (f) => f.hasAudio && !f.hasVideo && f.container === "mp4",
+      quality: "highestaudio",
+    });
+    ext = "m4a";
+    mimeType = "audio/mp4";
+  } catch {
+    format = ytdl.chooseFormat(info.formats, {
+      filter: "audioonly",
+      quality: "highestaudio",
+    });
+    ext = format?.container === "webm" ? "webm" : "m4a";
+    mimeType = ext === "webm" ? "audio/webm" : "audio/mp4";
+  }
+
+  const stream = ytdl.downloadFromInfo(info, { format });
+  const buffer = await streamToBuffer(stream);
+  return { buffer, filename: `${title}.${ext}`, mimeType };
 }
 
 export async function POST(request) {
@@ -37,41 +93,14 @@ export async function POST(request) {
       );
     }
 
-    if (!ytdl.validateURL(url)) {
-      return NextResponse.json(
-        { error: "URL de YouTube no válida" },
-        { status: 400 }
-      );
+    const modalUrl = getModalYoutubeUrl();
+    let buffer, filename, mimeType;
+
+    if (modalUrl) {
+      ({ buffer, filename, mimeType } = await downloadViaModal(url, modalUrl));
+    } else {
+      ({ buffer, filename, mimeType } = await downloadViaYtdlCore(url));
     }
-
-    const info = await ytdl.getInfo(url);
-    const title = sanitizeFilename(info.videoDetails.title);
-
-    // Prefer mp4/aac (works in all browsers incl. Safari)
-    // Fall back to best audio-only (usually webm/opus)
-    let format;
-    let ext;
-    let mimeType;
-
-    try {
-      format = ytdl.chooseFormat(info.formats, {
-        filter: (f) => f.hasAudio && !f.hasVideo && f.container === "mp4",
-        quality: "highestaudio",
-      });
-      ext = "m4a";
-      mimeType = "audio/mp4";
-    } catch {
-      format = ytdl.chooseFormat(info.formats, {
-        filter: "audioonly",
-        quality: "highestaudio",
-      });
-      ext = format?.container === "webm" ? "webm" : "m4a";
-      mimeType = ext === "webm" ? "audio/webm" : "audio/mp4";
-    }
-
-    const stream = ytdl.downloadFromInfo(info, { format });
-    const buffer = await streamToBuffer(stream);
-    const filename = `${title}.${ext}`;
 
     return new NextResponse(buffer, {
       headers: {
@@ -83,14 +112,16 @@ export async function POST(request) {
   } catch (err) {
     const msg = String(err?.message || "");
     let userError = "Error al descargar el audio de YouTube";
-    if (msg.includes("private") || msg.includes("unavailable") || msg.includes("not available")) {
+    if (
+      msg.includes("privado") ||
+      msg.includes("unavailable") ||
+      msg.includes("not available")
+    ) {
       userError = "Video no disponible o privado";
-    } else if (msg.includes("age") || msg.includes("sign in")) {
+    } else if (msg.includes("edad") || msg.includes("age") || msg.includes("sign in")) {
       userError = "Video con restricción de edad";
     } else if (msg.includes("copyright") || msg.includes("blocked")) {
       userError = "Video bloqueado por derechos de autor";
-    } else if (msg.includes("too large") || msg.includes("maxsize")) {
-      userError = "El archivo de audio es demasiado grande";
     }
     return NextResponse.json({ error: userError }, { status: 500 });
   }
