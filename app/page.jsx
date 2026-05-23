@@ -63,11 +63,12 @@ const STEMS = [
 ];
 
 const ACCEPT_AUDIO = /\.(wav|mp3|flac|m4a|webm|aiff?)$/i;
-const MAX_TRIM_WINDOW_SECONDS = 60;
+const MAX_TRIM_WINDOW_SECONDS = 300;
 const MAX_TRIM_WINDOW_TOAST = "Chicos que vale un .002€ cada vez. jajajajja.";
 const SHOW_STEM_PLAYERS = false;
 const SHOW_SEQUENCER_PANEL = false;
 const SHOW_GROOVE_COMPARISON = false;
+const SHOW_YOUTUBE_IMPORT = false;
 
 const STEP_MAP = [
   { max: 10, label: "Loading track" },
@@ -4771,7 +4772,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
             </div>
           </div>
 
-          {/* YouTube URL */}
+          {SHOW_YOUTUBE_IMPORT && (
           <div>
             <div
               style={{
@@ -4864,6 +4865,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
               </div>
             )}
           </div>
+          )}
         </>
       )}
 
@@ -6911,7 +6913,7 @@ export default function Page() {
           )}
         </div>
 
-        {!file && (
+        {SHOW_YOUTUBE_IMPORT && !file && (
           <div style={{ marginBottom: 22 }}>
             <div
               style={{
