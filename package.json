@@ -14,6 +14,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "jszip": "^3.10.1",
     "next": "15.5.12",
     "onnxruntime-web": "^1.26.0",

@@ -1,11 +1,5 @@
 import { NextResponse } from "next/server";
-import { execFile } from "child_process";
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
+import ytdl from "@distube/ytdl-core";
 
 export const maxDuration = 300;
 
@@ -23,8 +17,15 @@ function sanitizeFilename(name) {
   );
 }
 
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 export async function POST(request) {
-  let tmpDir;
   try {
     const body = await request.json();
     const url = (body?.url || "").trim();
@@ -36,64 +37,61 @@ export async function POST(request) {
       );
     }
 
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ytdl-"));
-    const outputTemplate = path.join(tmpDir, "%(title)s.%(ext)s");
-
-    await execFileAsync(
-      "yt-dlp",
-      [
-        "-x",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "--no-playlist",
-        "--max-filesize", "150m",
-        "--socket-timeout", "30",
-        "--no-warnings",
-        "-o", outputTemplate,
-        url,
-      ],
-      { timeout: 240000 }
-    );
-
-    const files = await fs.readdir(tmpDir);
-    const mp3File = files.find((f) => f.endsWith(".mp3"));
-
-    if (!mp3File) {
-      throw new Error("No se pudo extraer el audio MP3");
+    if (!ytdl.validateURL(url)) {
+      return NextResponse.json(
+        { error: "URL de YouTube no válida" },
+        { status: 400 }
+      );
     }
 
-    const filePath = path.join(tmpDir, mp3File);
-    const fileBuffer = await fs.readFile(filePath);
-    const safeName =
-      sanitizeFilename(path.basename(mp3File, ".mp3")) + ".mp3";
+    const info = await ytdl.getInfo(url);
+    const title = sanitizeFilename(info.videoDetails.title);
 
-    return new NextResponse(fileBuffer, {
+    // Prefer mp4/aac (works in all browsers incl. Safari)
+    // Fall back to best audio-only (usually webm/opus)
+    let format;
+    let ext;
+    let mimeType;
+
+    try {
+      format = ytdl.chooseFormat(info.formats, {
+        filter: (f) => f.hasAudio && !f.hasVideo && f.container === "mp4",
+        quality: "highestaudio",
+      });
+      ext = "m4a";
+      mimeType = "audio/mp4";
+    } catch {
+      format = ytdl.chooseFormat(info.formats, {
+        filter: "audioonly",
+        quality: "highestaudio",
+      });
+      ext = format?.container === "webm" ? "webm" : "m4a";
+      mimeType = ext === "webm" ? "audio/webm" : "audio/mp4";
+    }
+
+    const stream = ytdl.downloadFromInfo(info, { format });
+    const buffer = await streamToBuffer(stream);
+    const filename = `${title}.${ext}`;
+
+    return new NextResponse(buffer, {
       headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Disposition": `attachment; filename="${safeName}"`,
-        "X-Filename": safeName,
+        "Content-Type": mimeType,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "X-Filename": filename,
       },
     });
   } catch (err) {
-    const msg = String(err?.stderr || err?.stdout || err?.message || "");
+    const msg = String(err?.message || "");
     let userError = "Error al descargar el audio de YouTube";
-    if (
-      msg.includes("unavailable") ||
-      msg.includes("private") ||
-      msg.includes("not available")
-    ) {
+    if (msg.includes("private") || msg.includes("unavailable") || msg.includes("not available")) {
       userError = "Video no disponible o privado";
     } else if (msg.includes("age") || msg.includes("sign in")) {
       userError = "Video con restricción de edad";
     } else if (msg.includes("copyright") || msg.includes("blocked")) {
       userError = "Video bloqueado por derechos de autor";
-    } else if (msg.includes("filesize") || msg.includes("too large")) {
-      userError = "El archivo es demasiado grande (máx. 150 MB)";
+    } else if (msg.includes("too large") || msg.includes("maxsize")) {
+      userError = "El archivo de audio es demasiado grande";
     }
     return NextResponse.json({ error: userError }, { status: 500 });
-  } finally {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    }
   }
 }

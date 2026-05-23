@@ -62,7 +62,7 @@ const STEMS = [
   },
 ];
 
-const ACCEPT_AUDIO = /\.(wav|mp3|flac|aiff?)$/i;
+const ACCEPT_AUDIO = /\.(wav|mp3|flac|m4a|webm|aiff?)$/i;
 const MAX_TRIM_WINDOW_SECONDS = 60;
 const MAX_TRIM_WINDOW_TOAST = "Chicos que vale un .002€ cada vez. jajajajja.";
 
@@ -4496,7 +4496,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, accentColor, t 
             <input
               ref={fileRef}
               type="file"
-              accept=".wav,.mp3,.flac,.aif,.aiff"
+              accept=".wav,.mp3,.flac,.aif,.aiff,.m4a,.webm"
               style={{ display: "none" }}
               onChange={(e) => handleFile(e.target.files[0])}
             />
@@ -6476,7 +6476,7 @@ export default function Page() {
           <input
             ref={fileRef}
             type="file"
-            accept=".wav,.mp3,.flac,.aif,.aiff"
+            accept=".wav,.mp3,.flac,.aif,.aiff,.m4a,.webm"
             style={{ display: "none" }}
             onChange={(event) => handleFile(event.target.files[0])}
           />
