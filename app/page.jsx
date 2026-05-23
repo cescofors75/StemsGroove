@@ -2852,14 +2852,29 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   const midY = H / 2;
-  const spp = Math.max(1, Math.floor(mono.length / W));
+  const waveformDuration = Number(gridOptions?.waveformDuration || 0);
+  const mixDuration = Number(gridOptions?.mixDuration || 0);
+  const activeRatio = mixDuration > 0 && waveformDuration > 0
+    ? clamp(waveformDuration / mixDuration, 0.01, 1)
+    : 1;
+  const activeW = Math.max(1, Math.round(W * activeRatio));
+  const spp = Math.max(1, Math.floor(mono.length / activeW));
+
+  // Full row background represents the shared mix timeline; the waveform only
+  // occupies the portion where this stem actually has audio after BPM matching.
+  ctx.fillStyle = "rgba(0,0,0,0.18)";
+  ctx.fillRect(0, 0, W, H);
+  if (activeW < W) {
+    ctx.fillStyle = "rgba(255,255,255,0.025)";
+    ctx.fillRect(activeW, 0, W - activeW, H);
+  }
 
   // Per-pixel stats
-  const pkPos = new Float32Array(W);
-  const pkNeg = new Float32Array(W);
-  const rms   = new Float32Array(W);
+  const pkPos = new Float32Array(activeW);
+  const pkNeg = new Float32Array(activeW);
+  const rms   = new Float32Array(activeW);
   let gPeak = 0.001;
-  for (let x = 0; x < W; x++) {
+  for (let x = 0; x < activeW; x++) {
     const s = x * spp, e = Math.min(s + spp, mono.length);
     let mx = 0, mn = 0, acc = 0;
     for (let i = s; i < e; i++) {
@@ -2876,10 +2891,6 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
 
   // Normalize: scale so loudest peak uses 92% of half-height
   const scale = (midY * 0.92) / gPeak;
-
-  // ── Layer 0: subtle dark background ──
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.fillRect(0, 0, W, H);
 
   // Build peak shape paths once (reused below)
   // topPath: upper edge (positive peaks), botPath: lower edge (negative peaks)
@@ -2899,8 +2910,8 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.fillStyle = gTop;
   ctx.beginPath();
   ctx.moveTo(0, midY);
-  for (let x = 0; x < W; x++) ctx.lineTo(x, topY(x));
-  ctx.lineTo(W, midY);
+  for (let x = 0; x < activeW; x++) ctx.lineTo(x, topY(x));
+  ctx.lineTo(activeW, midY);
   ctx.closePath();
   ctx.fill();
   ctx.restore();
@@ -2915,8 +2926,8 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.fillStyle = gBot;
   ctx.beginPath();
   ctx.moveTo(0, midY);
-  for (let x = 0; x < W; x++) ctx.lineTo(x, botY(x));
-  ctx.lineTo(W, midY);
+  for (let x = 0; x < activeW; x++) ctx.lineTo(x, botY(x));
+  ctx.lineTo(activeW, midY);
   ctx.closePath();
   ctx.fill();
   ctx.restore();
@@ -2931,8 +2942,8 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.fillStyle = gRmsTop;
   ctx.beginPath();
   ctx.moveTo(0, midY);
-  for (let x = 0; x < W; x++) ctx.lineTo(x, rmsTopY(x));
-  ctx.lineTo(W, midY); ctx.closePath(); ctx.fill();
+  for (let x = 0; x < activeW; x++) ctx.lineTo(x, rmsTopY(x));
+  ctx.lineTo(activeW, midY); ctx.closePath(); ctx.fill();
   ctx.restore();
 
   ctx.save();
@@ -2944,8 +2955,8 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.fillStyle = gRmsBot;
   ctx.beginPath();
   ctx.moveTo(0, midY);
-  for (let x = 0; x < W; x++) ctx.lineTo(x, rmsBotY(x));
-  ctx.lineTo(W, midY); ctx.closePath(); ctx.fill();
+  for (let x = 0; x < activeW; x++) ctx.lineTo(x, rmsBotY(x));
+  ctx.lineTo(activeW, midY); ctx.closePath(); ctx.fill();
   ctx.restore();
 
   // ── Layer 3: edge lines — double pass glow ──
@@ -2957,11 +2968,11 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.moveTo(0, topY(0));
-  for (let x = 1; x < W; x++) ctx.lineTo(x, topY(x));
+  for (let x = 1; x < activeW; x++) ctx.lineTo(x, topY(x));
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(0, botY(0));
-  for (let x = 1; x < W; x++) ctx.lineTo(x, botY(x));
+  for (let x = 1; x < activeW; x++) ctx.lineTo(x, botY(x));
   ctx.stroke();
   ctx.restore();
 
@@ -2974,13 +2985,25 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.globalAlpha = 0.95;
   ctx.beginPath();
   ctx.moveTo(0, topY(0));
-  for (let x = 1; x < W; x++) ctx.lineTo(x, topY(x));
+  for (let x = 1; x < activeW; x++) ctx.lineTo(x, topY(x));
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(0, botY(0));
-  for (let x = 1; x < W; x++) ctx.lineTo(x, botY(x));
+  for (let x = 1; x < activeW; x++) ctx.lineTo(x, botY(x));
   ctx.stroke();
   ctx.restore();
+
+  if (activeW < W) {
+    ctx.save();
+    ctx.strokeStyle = `${color}55`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(activeW + 0.5, 0);
+    ctx.lineTo(activeW + 0.5, H);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   // ── Layer 4: center line ──
   ctx.globalAlpha = 1;
@@ -2991,7 +3014,7 @@ function drawMixerWaveform(canvas, mono, color, gridOptions = null) {
   ctx.stroke();
 
   // ── Layer 5: time grid overlay (optional) ──
-  if (gridOptions?.mixDuration > 0) {
+  if (gridOptions?.showGrid && gridOptions?.mixDuration > 0) {
     const dur = gridOptions.mixDuration;
     // Pick the smallest "nice" interval that fits without overcrowding (~48px min per step)
     const niceSteps = [1, 2, 4, 5, 10, 15, 20, 30, 60, 120, 300];
@@ -3203,18 +3226,23 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
         const canvas = mixCanvasRefs.current[stem.id];
         const mono = mixWaveformDataRef.current[stem.id];
         if (!canvas || !mono) return;
-        let grid = null;
-        if (showTimeline && mixDuration > 0) {
-          const isFirst = idx === 0;
-          const isLast = idx === availableStems.length - 1;
-          if (isFirst) grid = { mixDuration, showLabels: true };
-          else if (isLast) grid = { mixDuration, showLabels: false };
-        }
+        const buffer = mixBuffersRef.current[stem.id];
+        const rate = getPlaybackRate(stem.id);
+        const waveformDuration = buffer ? buffer.duration / rate : 0;
+        const isFirst = idx === 0;
+        const grid = mixDuration > 0
+          ? {
+              mixDuration,
+              waveformDuration,
+              showLabels: showTimeline && isFirst,
+              showGrid: showTimeline,
+            }
+          : null;
         drawMixerWaveform(canvas, mono, stem.color, grid);
       });
     });
     return () => cancelAnimationFrame(raf);
-  }, [mixReady, availableStems, expandedTrack, expanded, showTimeline, mixDuration]);
+  }, [mixReady, availableStems, expandedTrack, expanded, showTimeline, mixDuration, getPlaybackRate]);
 
   const mixStopRaf = useCallback(() => {
     if (mixRafRef.current) {
@@ -3585,6 +3613,23 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
           >
             STEM MIXER
           </span>
+          {baseName && (
+            <span
+              style={{
+                fontFamily: "'Space Mono', monospace",
+                fontSize: 9,
+                letterSpacing: 1.2,
+                color: "rgba(255,255,255,0.38)",
+                maxWidth: fullscreen ? 360 : 220,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={baseName}
+            >
+              {baseName}
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button
@@ -4361,13 +4406,126 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   const [youtubeStatus, setYoutubeStatus] = useState("idle");
   const [youtubeError, setYoutubeError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [editorDuration, setEditorDuration] = useState(0);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [fadeInMs, setFadeInMs] = useState(0);
+  const [fadeOutMs, setFadeOutMs] = useState(0);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorError, setEditorError] = useState("");
+  const [editorDragMode, setEditorDragMode] = useState(null);
   const fileRef = useRef(null);
+  const editorCanvasRef = useRef(null);
+  const editorDragRef = useRef(null);
+  const sourceBufferRef = useRef(null);
+  const waveformMonoRef = useRef(null);
 
   const visibleStems = separateMode === "htdemucs_6s"
     ? STEMS
     : STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano");
 
   const baseName = file ? file.name.replace(/\.[^.]+$/, "") : `Track ${trackIdx}`;
+
+  useEffect(() => {
+    drawEditorWaveform(
+      editorCanvasRef.current,
+      waveformMonoRef.current,
+      trimStart,
+      trimEnd || editorDuration,
+      editorDuration,
+    );
+  }, [editorDuration, trimEnd, trimStart]);
+
+  const updateTrimFromPointer = useCallback((clientX) => {
+    const canvas = editorCanvasRef.current;
+    const drag = editorDragRef.current;
+    if (!canvas || !drag || !editorDuration) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    const time = ratio * editorDuration;
+    const minGap = 0.05;
+    const maxWindow = Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration);
+
+    if (drag.mode === "start") {
+      setTrimStart(clamp(time, Math.max(0, trimEnd - maxWindow), Math.max(0, trimEnd - minGap)));
+    } else if (drag.mode === "end") {
+      const minEnd = Math.min(editorDuration, trimStart + minGap);
+      const maxEnd = Math.max(minEnd, Math.min(editorDuration, trimStart + maxWindow));
+      setTrimEnd(clamp(time, minEnd, maxEnd));
+    } else if (drag.mode === "move") {
+      const selectionLength = Math.min(drag.selectionLength, maxWindow);
+      const nextStart = clamp(time - drag.pointerOffset, 0, Math.max(0, editorDuration - selectionLength));
+      setTrimStart(nextStart);
+      setTrimEnd(Math.min(editorDuration, nextStart + selectionLength));
+    }
+  }, [editorDuration, trimEnd, trimStart]);
+
+  useEffect(() => {
+    if (!editorDragMode) return undefined;
+    const handlePointerMove = (event) => updateTrimFromPointer(event.clientX);
+    const handlePointerUp = () => {
+      editorDragRef.current = null;
+      setEditorDragMode(null);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [editorDragMode, updateTrimFromPointer]);
+
+  const beginEditorDrag = useCallback((event) => {
+    if (editorLoading || !editorDuration || !editorCanvasRef.current) return;
+    const rect = editorCanvasRef.current.getBoundingClientRect();
+    const pointerX = clamp(event.clientX - rect.left, 0, rect.width);
+    const startX = (trimStart / editorDuration) * rect.width;
+    const endX = ((trimEnd || editorDuration) / editorDuration) * rect.width;
+    const handleZone = 16;
+    let mode = null;
+    if (Math.abs(pointerX - startX) <= handleZone) mode = "start";
+    else if (Math.abs(pointerX - endX) <= handleZone) mode = "end";
+    else if (pointerX > startX && pointerX < endX) mode = "move";
+    if (!mode) return;
+
+    event.preventDefault();
+    const pointerTime = (pointerX / Math.max(1, rect.width)) * editorDuration;
+    editorDragRef.current = {
+      mode,
+      pointerOffset: pointerTime - trimStart,
+      selectionLength: Math.min(Math.max(0.05, (trimEnd || editorDuration) - trimStart), Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration)),
+    };
+    setEditorDragMode(mode);
+    updateTrimFromPointer(event.clientX);
+  }, [editorDuration, editorLoading, trimEnd, trimStart, updateTrimFromPointer]);
+
+  const loadEditorBuffer = useCallback(async (incoming) => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error("Editor no disponible en este navegador.");
+    const context = new AudioContextClass();
+    try {
+      const decoded = await context.decodeAudioData((await incoming.arrayBuffer()).slice(0));
+      sourceBufferRef.current = decoded;
+      waveformMonoRef.current = mixToMono(decoded);
+      setEditorDuration(decoded.duration);
+      setTrimStart(0);
+      setTrimEnd(Math.min(decoded.duration, MAX_TRIM_WINDOW_SECONDS));
+      setFadeInMs(0);
+      setFadeOutMs(0);
+      setEditorError("");
+    } finally {
+      await context.close();
+    }
+  }, []);
+
+  const buildEditedFile = useCallback(async () => {
+    if (!file || !sourceBufferRef.current) return file;
+    const safeEnd = Math.max(trimStart + 0.05, trimEnd || editorDuration || trimStart + 0.05);
+    const editedBuffer = renderEditedBuffer(sourceBufferRef.current, trimStart, safeEnd, fadeInMs / 1000, fadeOutMs / 1000);
+    const blob = audioBufferToWavBlob(editedBuffer);
+    return new File([blob], `${baseName || "track"}-edit.wav`, { type: "audio/wav" });
+  }, [baseName, editorDuration, fadeInMs, fadeOutMs, file, trimEnd, trimStart]);
 
   useEffect(() => {
     onStemsChange(trackId, status === "done" ? stems : {}, baseName, trackBpm);
@@ -4383,10 +4541,26 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     setOriginalUrl(URL.createObjectURL(incoming));
     setStems({});
     setTrackBpm(null);
+    sourceBufferRef.current = null;
+    waveformMonoRef.current = null;
+    setEditorDuration(0);
+    setTrimStart(0);
+    setTrimEnd(0);
+    setFadeInMs(0);
+    setFadeOutMs(0);
+    setEditorLoading(true);
+    setEditorError("");
     setStatus("idle");
     setProgress(0);
     setError("");
     setCurrentStep("");
+    loadEditorBuffer(incoming)
+      .catch((err) => {
+        sourceBufferRef.current = null;
+        waveformMonoRef.current = null;
+        setEditorError(err instanceof Error ? err.message : "No se pudo cargar el editor de audio.");
+      })
+      .finally(() => setEditorLoading(false));
   };
 
   const handleYoutubeDownload = async () => {
@@ -4435,9 +4609,10 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     }, 380);
 
     try {
-      const detectedBpm = await estimateBpmFromFile(file).catch(() => null);
+      const sourceFile = await buildEditedFile();
+      const detectedBpm = await estimateBpmFromFile(sourceFile).catch(() => null);
       setTrackBpm(detectedBpm);
-      const nextStems = await separateTrackViaModal(file, {
+      const nextStems = await separateTrackViaModal(sourceFile, {
         model: separateMode,
         onProgress: ({ progress: p, label }) => {
           if (Number.isFinite(p)) setProgress(Math.max(3, Math.min(96, Math.round(p))));
@@ -4460,6 +4635,15 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setFile(null);
     setOriginalUrl("");
+    sourceBufferRef.current = null;
+    waveformMonoRef.current = null;
+    setEditorDuration(0);
+    setTrimStart(0);
+    setTrimEnd(0);
+    setFadeInMs(0);
+    setFadeOutMs(0);
+    setEditorError("");
+    setEditorLoading(false);
     setStatus("idle");
     setProgress(0);
     setStems({});
@@ -4685,30 +4869,82 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
 
       {/* File loaded, ready to process */}
       {file && !ready && !processing && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                fontFamily: "'Space Mono', monospace",
-                fontSize: 12,
-                color: "#fff",
-                fontWeight: 700,
-                wordBreak: "break-all",
-              }}
-            >
-              {file.name}
+        <div style={{ display: "grid", gap: 12 }}>
+          <div
+            style={{
+              background: "rgba(255,255,255,0.02)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 12,
+              padding: "12px 14px",
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: "#fff", fontWeight: 700, wordBreak: "break-all" }}>
+                  {file.name}
+                </div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 2 }}>
+                  {(file.size / 1024 / 1024).toFixed(2)} MB · seleccion max {MAX_TRIM_WINDOW_SECONDS}s
+                </div>
+              </div>
+              {editorLoading && (
+                <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: accentColor }}>
+                  CARGANDO ONDA...
+                </div>
+              )}
             </div>
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginTop: 2 }}>
-              {(file.size / 1024 / 1024).toFixed(2)} MB
-            </div>
+
+            {editorError ? (
+              <div style={{ fontSize: 11, color: "rgba(232,84,71,0.88)" }}>{editorError}</div>
+            ) : (
+              <>
+                <div
+                  style={{
+                    borderRadius: 10,
+                    overflow: "hidden",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    background: "rgba(255,255,255,0.02)",
+                    cursor: editorLoading ? "default" : editorDragMode === "move" ? "grabbing" : "ew-resize",
+                  }}
+                >
+                  <canvas
+                    ref={editorCanvasRef}
+                    onPointerDown={beginEditorDrag}
+                    style={{ width: "100%", height: 104, display: "block", touchAction: "none" }}
+                  />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px 14px" }}>
+                  {[
+                    { label: "TRIM IN", value: trimStart, text: formatSeconds(trimStart), min: 0, max: Math.max(0, editorDuration - 0.05), step: 0.01, onChange: (value) => setTrimStart(Math.min(value, Math.max(0, trimEnd - 0.05))) },
+                    { label: "TRIM OUT", value: trimEnd || editorDuration, text: formatSeconds(trimEnd || editorDuration), min: Math.min(editorDuration, trimStart + 0.05), max: editorDuration || 0, step: 0.01, onChange: (value) => setTrimEnd(Math.max(value, Math.min(editorDuration, trimStart + 0.05))) },
+                    { label: "FADE IN", value: fadeInMs, text: `${fadeInMs} ms`, min: 0, max: Math.round(Math.max(0, ((trimEnd || editorDuration) - trimStart) * 1000)), step: 10, onChange: setFadeInMs },
+                    { label: "FADE OUT", value: fadeOutMs, text: `${fadeOutMs} ms`, min: 0, max: Math.round(Math.max(0, ((trimEnd || editorDuration) - trimStart) * 1000)), step: 10, onChange: setFadeOutMs },
+                  ].map((control) => (
+                    <div key={control.label}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 9, color: "rgba(255,255,255,0.45)", letterSpacing: 1 }}>{control.label}</span>
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: control.label.startsWith("TRIM") ? accentColor : "rgba(255,255,255,0.58)" }}>{control.text}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={control.min}
+                        max={control.max}
+                        step={control.step}
+                        value={control.value}
+                        onChange={(event) => control.onChange(Number(event.target.value))}
+                        disabled={editorLoading || !editorDuration}
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
 
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
             {[
@@ -4740,13 +4976,14 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
           <button
             type="button"
             onClick={processTrack}
+            disabled={editorLoading}
             style={{
               background: accentColor,
               border: "none",
-              color: "#050505",
+              color: editorLoading ? "rgba(5,5,5,0.45)" : "#050505",
               padding: "8px 18px",
               borderRadius: 8,
-              cursor: "pointer",
+              cursor: editorLoading ? "wait" : "pointer",
               fontSize: 11,
               fontFamily: "'Space Mono', monospace",
               fontWeight: 700,
@@ -4773,6 +5010,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
           >
             {t("clear")}
           </button>
+          </div>
         </div>
       )}
 
