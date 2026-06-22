@@ -8,6 +8,7 @@
   "num_freq_bins": 2048,
   "spec_time_frames": 336,
   "spec_pad": 1536,
+  "inference_overlap": 0.1,
   "sources": [
     "drums",
     "bass",
