@@ -1,9 +1,9 @@
 <div align="center">
 
-# 🎚️ STEMS — Four-Stem Separator
+# 🎚️ STEMS — Four-Stem Separator (Local / On-Device)
 
-**Split any audio track into Vocals · Drums · Bass · Other**
-*Powered by [Demucs HTDemucs](https://github.com/facebookresearch/demucs) · Built with Next.js 15 · GPU-accelerated (CUDA)*
+**Split any WAV or MP3 track into Vocals · Drums · Bass · Other**
+*HTDemucs running 100% in the browser (WebGPU → WASM fallback) · Built with Next.js 15*
 
 ![preview](preview.png)
 
@@ -17,13 +17,14 @@
 - 🥁 **Drums** — kick, snare, hats and all percussion
 - 🎸 **Bass** — bass guitar and low-frequency content
 - 🎹 **Other** — guitars, synths and remaining layers
-- ⚡ **GPU-accelerated** — uses CUDA automatically when a NVIDIA GPU is detected
-- 🎛️ **3 quality modes** — Fast (`mdx_extra`), Balanced & Quality (`htdemucs`)
-- 🧪 **Browser engine** — HTDemucs ONNX runs client-side and is ready for Vercel-friendly hosting
-- 🎵 **Sequencer pattern view** — visual beat grid extracted from each stem, with BPM detection
-- 📡 **REST API with CORS** — integrate from any frontend project
-- 🔊 **Per-stem volume control** — independent sliders per stem
-- ⬇️ **MP3 download** — one click per stem
+- 🔒 **100% local / on-device** — the HTDemucs ONNX model runs in your browser. **No audio ever leaves your machine**, there is no backend separation service.
+- ⚡ **WebGPU accelerated** — automatically uses WebGPU when available and falls back to WASM.
+- 🎛️ **Mix editor** — trim, fade in/out and preview before separating. **No selection length limit** — process the whole track.
+- 🎵 **Sequencer pattern view** — visual beat grid extracted from each stem, with BPM detection.
+- 🔊 **Per-stem volume control** — independent sliders per stem.
+- ⬇️ **WAV download** — one click per stem.
+
+> Input is limited to **WAV** and **MP3** uploads. There is no YouTube import and no remote (Modal) processing — those paths were removed in favor of a fully local pipeline.
 
 ---
 
@@ -34,114 +35,23 @@
 | Tool | Version | Notes |
 |---|---|---|
 | Node.js | ≥ 18 | `node --version` |
-| Python | **3.12** | 3.14 is NOT supported by PyTorch |
-| FFmpeg | ≥ 6 | must be in `PATH` |
-| NVIDIA CUDA driver | 12.1+ | optional, for GPU acceleration |
+| A modern browser | — | Chrome/Edge recommended for WebGPU; WASM fallback works everywhere |
 
-### Install
+No Python, no FFmpeg, no GPU drivers and no cloud account are required — separation happens entirely client-side.
+
+### Install & run
 
 ```bash
-# Node packages
 npm install
-
-# Python virtual environment + demucs
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install demucs
-
-# (Optional) CUDA-accelerated PyTorch for NVIDIA GPUs
-.venv\Scripts\python.exe -m pip install --force-reinstall torch torchaudio ^
-  --index-url https://download.pytorch.org/whl/cu121
-```
-
-### Run
-
-```bash
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) 🎉
 
----
+For a stable local production build:
 
-## 📡 REST API
-
-Stems exposes two API routes you can call from **any other project** (CORS enabled).
-
-### `POST /api/separate`
-
-Accepts a `multipart/form-data` request and returns URLs for each stem.
-
-```js
-const form = new FormData();
-form.append("file", audioFile);     // .wav | .mp3 | .flac | .aiff
-form.append("mode", "balanced");    // "fast" | "balanced" | "quality"
-
-const res = await fetch("http://localhost:3000/api/separate", {
-  method: "POST",
-  body: form,
-});
-
-const { runId, stems, mode } = await res.json();
-// stems = {
-//   vocals: "/api/stems/<runId>/vocals",
-//   drums:  "/api/stems/<runId>/drums",
-//   bass:   "/api/stems/<runId>/bass",
-//   other:  "/api/stems/<runId>/other",
-// }
-```
-
-### `GET /api/stems/:runId/:stem`
-
-Streams the requested stem as `audio/mpeg`.
-
-```js
-const audio = new Audio(`http://localhost:3000${stems.vocals}`);
-audio.play();
-```
-
-### Restrict allowed origins (optional)
-
-Create `.env.local`:
-
-```env
-CORS_ALLOWED_ORIGINS=http://localhost:3001,https://your-other-app.com
-```
-
-Without this variable all origins (`*`) are allowed.
-
----
-
-## 🧠 Processing Modes
-
-| Mode | Model | MP3 Bitrate | Speed | Quality |
-|---|---|---|---|---|
-| `fast` | `mdx_extra` | 192 kbps | ⚡⚡⚡ | ★★★☆☆ |
-| `balanced` | `htdemucs` | 224 kbps | ⚡⚡ | ★★★★☆ |
-| `quality` | `htdemucs` | 320 kbps | ⚡ | ★★★★★ |
-
-> GPU (CUDA): ~30-60 s/track · CPU only: ~5-10 min/track
-
----
-
-## 🗂️ Project Structure
-
-```
-stems/
-├── app/
-│   ├── page.jsx                       # Main UI — upload, playback, sequencer
-│   ├── layout.jsx
-│   ├── globals.css
-│   └── api/
-│       ├── separate/route.js          # POST — runs Demucs, returns stem URLs
-│       └── stems/[runId]/[stem]/
-│           └── route.js               # GET  — streams stem MP3
-├── lib/
-│   └── cors.js                        # CORS helper (shared by API routes)
-├── scripts/
-│   └── dev-solo.cjs                   # Dev server launcher
-├── .venv/                             # Python 3.12 venv (git-ignored)
-├── .stems/                            # Temporary stem output (git-ignored)
-└── next.config.mjs
+```bash
+npm run serve   # next build && next start
 ```
 
 ---
@@ -149,114 +59,78 @@ stems/
 ## ⚙️ How it works
 
 ```
-Browser  ──POST /api/separate──▶  Next.js Route Handler
-                                        │
-                               saves audio to tmp dir
-                                        │
-                               .venv/Scripts/python.exe
-                               -m demucs.separate ...
-                                        │  (GPU via CUDA if available)
-                               htdemucs / mdx_extra model
-                                        │
-                               4 × stem.mp3 → .stems/<runId>/
-                               temp dir cleaned up automatically
-                                        │
-                         ◀── { runId, stems{} } JSON ──
-
-Browser  ──GET /api/stems/<runId>/vocals──▶  streams audio/mpeg
+Browser (your machine)
+   │  upload WAV / MP3
+   ▼
+Mix editor (trim · fade · preview)
+   │  build edited WAV (Web Audio)
+   ▼
+lib/client-demixer.js
+   │  decode → STFT → HTDemucs ONNX (WebGPU / WASM) → iSTFT
+   ▼
+4 × stem WAV (Vocals · Drums · Bass · Other)
+   │
+   ▼
+Players · per-stem volume · sequencer · WAV download
 ```
 
-### Browser deployment
+The whole separation flow lives in [lib/client-demixer.js](lib/client-demixer.js) and reads its runtime configuration from
+[public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json).
 
-The separation flow now runs in the browser through [lib/client-demixer.js](lib/client-demixer.js) and reads its runtime configuration from [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json).
+### Model hosting
 
-Recommended deployment layout:
-
-1. Keep the repository light and do not commit the `.onnx` model file.
-2. Export the model offline with `tools/export_htdemucs_onnx.py`.
-3. Host the generated `.onnx` file on external static storage such as a CDN, GitHub Releases, Hugging Face or similar.
-4. Point `modelUrl` in [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json) to that external URL.
+1. Keep the repository light — do **not** commit the `.onnx` model file.
+2. Export the model offline with [tools/export_htdemucs_onnx.py](tools/export_htdemucs_onnx.py).
+3. Host the generated `.onnx` on static storage (CDN, GitHub Releases, Hugging Face, Vercel Blob…).
+4. Point `modelUrl` in [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json) to that URL.
 5. Keep [public/models/htdemucs/htdemucs.json](public/models/htdemucs/htdemucs.json) in the repo as lightweight metadata.
 
-This avoids pushing a 100MB+ model into git while keeping Vercel deployment simple: frontend bundle plus lightweight static metadata.
+This keeps the frontend bundle small while serving the model as a static asset the browser downloads once.
 
 ---
 
-## 📦 Windows Quick Install
+## 🗂️ Project Structure
 
-```powershell
-winget install --id Python.Python.3.12
-winget install --id Gyan.FFmpeg
 ```
+StemsGroove/
+├── app/
+│   ├── page.jsx        # Main UI — upload, editor, separation, players, sequencer
+│   ├── layout.jsx
+│   └── globals.css
+├── lib/
+│   ├── client-demixer.js   # Local in-browser HTDemucs pipeline (ONNX + STFT/iSTFT)
+│   ├── i18n.js
+│   └── themes.js
+├── public/models/htdemucs/ # manifest.json + lightweight metadata
+├── scripts/dev-solo.cjs    # Dev server launcher
+├── tools/                  # ONNX export helper + notes
+└── next.config.mjs
+```
+
+---
+
+## 🦀 Rust + WASM: evaluation
+
+The heaviest part of [lib/client-demixer.js](lib/client-demixer.js) is the pure-JS DSP around the model — FFT, STFT/iSTFT, windowing, padding and segment overlap-add. The ONNX inference itself already runs in optimized native/WASM/WebGPU kernels via `onnxruntime-web`, so it is **not** the candidate for a rewrite. A focused assessment:
+
+**Where Rust + WASM would help**
+- The hand-written radix-2 `fftInPlace`, `stft`, `istft` and the overlap-add loops are O(n·log n) over millions of samples in single-threaded JS. Rust compiled to WASM (with SIMD, and optionally an FFT crate like `rustfft`) would realistically cut that DSP time several-fold and reduce GC pressure from the many `Float32Array`/`Float64Array` allocations.
+- Deterministic, allocation-free hot loops are a natural fit for WASM.
+
+**Where it would *not* move the needle**
+- Model inference dominates wall-clock time and is already accelerated by ORT. Rust can't speed that up.
+- `decodeAudioData`, `URL.createObjectURL` and WAV encoding are browser/IO bound.
+
+**Cost / trade-offs**
+- Adds a Rust toolchain + `wasm-pack`/`wasm-bindgen` build step and a `.wasm` artifact to ship and version.
+- Data marshalling across the JS↔WASM boundary must be zero-copy (shared memory views) to avoid eating the gains.
+- WASM SIMD/threads need the right COOP/COEP headers when threading is enabled.
+
+**Recommendation**
+- Worthwhile as a *targeted* optimization: port only the FFT/STFT/iSTFT + overlap-add into a small Rust crate exposing `stft(...)`/`istft(...)` over flat `Float32Array` buffers, keep orchestration and ORT in JS. Start by profiling a real track to confirm the DSP share of total time before investing — if inference is ~80%+ of the time, the user-visible win is modest and may not justify the added build complexity.
 
 ---
 
 ## 📄 License
 
 MIT
-
-
-## Requisitos
-
-- Node.js 18+
-- Python 3.9+
-- `ffmpeg` disponible en PATH
-
-## 1) Instalar dependencias de Python
-
-```bash
-pip install demucs fastapi uvicorn python-multipart
-```
-
-Nota: En este proyecto, Demucs se ejecuta desde la API de Next.js usando `python -m demucs.separate`.
-
-## 2) Instalar dependencias de Node
-
-```bash
-npm install
-```
-
-## 3) Ejecutar en local
-
-```bash
-npm run dev
-```
-
-Abre `http://localhost:3000`.
-
-Este comando ahora arranca en modo `dev:solo`: mata procesos `next dev` previos, limpia `.next` y normaliza ruta para evitar errores de chunks tipo `Cannot find module './331.js'`.
-
-Si aparece un error tipo `Cannot find module './331.js'` o chunks faltantes en `.next`, usa arranque limpio:
-
-```bash
-npm run dev:clean
-```
-
-Tambien puedes usar:
-
-```bash
-npm run dev:solo
-```
-
-Tip: evita correr `npm run build` y `npm run dev` al mismo tiempo en otra terminal.
-
-Para uso diario estable (sin hot reload), puedes usar modo produccion local:
-
-```bash
-npm run serve
-```
-
-## Flujo
-
-- `app/page.jsx`: UI de carga, progreso, reproduccion y descarga de stems.
-- `app/api/separate/route.js`: recibe archivo, ejecuta HTDemucs, guarda stems en `.stems/<runId>/`.
-- `app/api/stems/[runId]/[stem]/route.js`: sirve cada stem como `audio/mpeg`.
-
-## Notas de rendimiento
-
-- GPU CUDA: aprox. 30-60s por track.
-- CPU: aprox. 5-10 min por track.
-
-## Limpieza de archivos
-
-Los stems se guardan en `.stems/`. Puedes limpiar manualmente esa carpeta cuando quieras.

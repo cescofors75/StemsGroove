@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { separateTrackViaModal } from "../lib/modal-separator.js";
+import { separateTrackInBrowser } from "../lib/client-demixer.js";
 import { getT, LOCALES } from "../lib/i18n.js";
 import { THEMES, THEME_ORDER } from "../lib/themes.js";
 
@@ -62,13 +62,10 @@ const STEMS = [
   },
 ];
 
-const ACCEPT_AUDIO = /\.(wav|mp3|flac|m4a|webm|aiff?)$/i;
-const MAX_TRIM_WINDOW_SECONDS = 300;
-const MAX_TRIM_WINDOW_TOAST = "Chicos que vale un .002€ cada vez. jajajajja.";
+const ACCEPT_AUDIO = /\.(wav|mp3)$/i;
 const SHOW_STEM_PLAYERS = false;
 const SHOW_SEQUENCER_PANEL = false;
 const SHOW_GROOVE_COMPARISON = false;
-const SHOW_YOUTUBE_IMPORT = false;
 
 const STEP_MAP = [
   { max: 10, label: "Loading track" },
@@ -4402,10 +4399,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   const [error, setError] = useState("");
   const [stems, setStems] = useState({});
   const [trackBpm, setTrackBpm] = useState(null);
-  const [separateMode, setSeparateMode] = useState("htdemucs_6s");
-  const [youtubeUrl, setYoutubeUrl] = useState("");
-  const [youtubeStatus, setYoutubeStatus] = useState("idle");
-  const [youtubeError, setYoutubeError] = useState("");
+  const [separateMode, setSeparateMode] = useState("htdemucs");
   const [dragging, setDragging] = useState(false);
   const [editorDuration, setEditorDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
@@ -4421,9 +4415,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   const sourceBufferRef = useRef(null);
   const waveformMonoRef = useRef(null);
 
-  const visibleStems = separateMode === "htdemucs_6s"
-    ? STEMS
-    : STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano");
+  const visibleStems = STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano");
 
   const baseName = file ? file.name.replace(/\.[^.]+$/, "") : `Track ${trackIdx}`;
 
@@ -4446,7 +4438,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
     const time = ratio * editorDuration;
     const minGap = 0.05;
-    const maxWindow = Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration);
+    const maxWindow = editorDuration;
 
     if (drag.mode === "start") {
       setTrimStart(clamp(time, Math.max(0, trimEnd - maxWindow), Math.max(0, trimEnd - minGap)));
@@ -4495,7 +4487,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     editorDragRef.current = {
       mode,
       pointerOffset: pointerTime - trimStart,
-      selectionLength: Math.min(Math.max(0.05, (trimEnd || editorDuration) - trimStart), Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration)),
+      selectionLength: Math.max(0.05, (trimEnd || editorDuration) - trimStart),
     };
     setEditorDragMode(mode);
     updateTrimFromPointer(event.clientX);
@@ -4511,7 +4503,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
       waveformMonoRef.current = mixToMono(decoded);
       setEditorDuration(decoded.duration);
       setTrimStart(0);
-      setTrimEnd(Math.min(decoded.duration, MAX_TRIM_WINDOW_SECONDS));
+      setTrimEnd(decoded.duration);
       setFadeInMs(0);
       setFadeOutMs(0);
       setEditorError("");
@@ -4564,33 +4556,6 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
       .finally(() => setEditorLoading(false));
   };
 
-  const handleYoutubeDownload = async () => {
-    const urlTrimmed = youtubeUrl.trim();
-    if (!urlTrimmed || youtubeStatus === "loading") return;
-    setYoutubeStatus("loading");
-    setYoutubeError("");
-    try {
-      const res = await fetch("/api/youtube", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlTrimmed }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Error al descargar de YouTube");
-      }
-      const filename = res.headers.get("X-Filename") || "youtube_audio.mp3";
-      const blob = await res.blob();
-      const audioFile = new File([blob], filename, { type: "audio/mpeg" });
-      setYoutubeStatus("idle");
-      setYoutubeUrl("");
-      handleFile(audioFile);
-    } catch (err) {
-      setYoutubeStatus("error");
-      setYoutubeError(err.message || "Error al descargar de YouTube");
-    }
-  };
-
   const processTrack = async () => {
     if (!file || status === "processing") return;
     setError("");
@@ -4613,8 +4578,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
       const sourceFile = await buildEditedFile();
       const detectedBpm = await estimateBpmFromFile(sourceFile).catch(() => null);
       setTrackBpm(detectedBpm);
-      const nextStems = await separateTrackViaModal(sourceFile, {
-        model: separateMode,
+      const nextStems = await separateTrackInBrowser(sourceFile, {
         onProgress: ({ progress: p, label }) => {
           if (Number.isFinite(p)) setProgress(Math.max(3, Math.min(96, Math.round(p))));
           if (label) setCurrentStep(label);
@@ -4753,7 +4717,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
             <input
               ref={fileRef}
               type="file"
-              accept=".wav,.mp3,.flac,.aif,.aiff,.m4a,.webm"
+              accept=".wav,.mp3"
               style={{ display: "none" }}
               onChange={(e) => handleFile(e.target.files[0])}
             />
@@ -4768,104 +4732,9 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
               ARRASTRA O HAGA CLIC PARA SUBIR AUDIO
             </div>
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 4 }}>
-              WAV / MP3 / FLAC / AIFF
+              WAV / MP3
             </div>
           </div>
-
-          {SHOW_YOUTUBE_IMPORT && (
-          <div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                background: "rgba(255,40,40,0.04)",
-                border: `1px solid ${youtubeStatus === "error" ? "rgba(255,80,80,0.4)" : "rgba(255,80,80,0.14)"}`,
-                borderRadius: 10,
-                padding: "7px 10px 7px 12px",
-                transition: "border-color 0.2s",
-              }}
-            >
-              <svg width="20" height="14" viewBox="0 0 22 16" fill="none" style={{ flexShrink: 0 }}>
-                <rect width="22" height="16" rx="3.5" fill="#FF0000" fillOpacity="0.85" />
-                <polygon points="9,4 9,12 16,8" fill="white" />
-              </svg>
-              <input
-                type="url"
-                value={youtubeUrl}
-                onChange={(e) => {
-                  setYoutubeUrl(e.target.value);
-                  if (youtubeError) setYoutubeError("");
-                  if (youtubeStatus === "error") setYoutubeStatus("idle");
-                }}
-                onKeyDown={(e) => e.key === "Enter" && handleYoutubeDownload()}
-                placeholder="https://youtube.com/watch?v=..."
-                disabled={youtubeStatus === "loading"}
-                style={{
-                  flex: 1,
-                  background: "transparent",
-                  border: "none",
-                  outline: "none",
-                  color: "rgba(255,255,255,0.82)",
-                  fontSize: 11,
-                  fontFamily: "'Space Mono', monospace",
-                  minWidth: 0,
-                  opacity: youtubeStatus === "loading" ? 0.5 : 1,
-                }}
-              />
-              <button
-                type="button"
-                onClick={handleYoutubeDownload}
-                disabled={!youtubeUrl.trim() || youtubeStatus === "loading"}
-                style={{
-                  background: "rgba(255,80,80,0.16)",
-                  border: "1px solid rgba(255,80,80,0.32)",
-                  color: !youtubeUrl.trim() || youtubeStatus === "loading"
-                    ? "rgba(255,255,255,0.3)"
-                    : "rgba(255,255,255,0.85)",
-                  padding: "5px 12px",
-                  borderRadius: 7,
-                  cursor: !youtubeUrl.trim() || youtubeStatus === "loading" ? "not-allowed" : "pointer",
-                  fontSize: 10,
-                  fontFamily: "'Space Mono', monospace",
-                  letterSpacing: 1,
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}
-              >
-                {youtubeStatus === "loading" && (
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 9,
-                      height: 9,
-                      border: "1.5px solid rgba(255,255,255,0.4)",
-                      borderTopColor: "rgba(255,255,255,0.9)",
-                      borderRadius: "50%",
-                      animation: "spin 0.7s linear infinite",
-                    }}
-                  />
-                )}
-                {youtubeStatus === "loading" ? "DESCARGANDO..." : "DESCARGAR"}
-              </button>
-            </div>
-            {youtubeError && (
-              <div
-                style={{
-                  marginTop: 6,
-                  fontSize: 11,
-                  color: "rgba(255,100,100,0.9)",
-                  fontFamily: "'Space Mono', monospace",
-                }}
-              >
-                {youtubeError}
-              </div>
-            )}
-          </div>
-          )}
         </>
       )}
 
@@ -4888,7 +4757,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
                   {file.name}
                 </div>
                 <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 2 }}>
-                  {(file.size / 1024 / 1024).toFixed(2)} MB · seleccion max {MAX_TRIM_WINDOW_SECONDS}s
+                  {(file.size / 1024 / 1024).toFixed(2)} MB · seleccion libre
                 </div>
               </div>
               {editorLoading && (
@@ -4950,8 +4819,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
 
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
             {[
-              { id: "htdemucs_6s", label: "6S", hint: "6 stems" },
-              { id: "htdemucs", label: "4S", hint: "4 stems" },
+              { id: "htdemucs", label: "4S", hint: "4 stems · Vocals · Drums · Bass · Other" },
             ].map((mode) => (
               <button
                 key={mode.id}
@@ -5205,7 +5073,7 @@ export default function Page() {
   const [playheadStep, setPlayheadStep] = useState(-1);
   const [patternBars, setPatternBars] = useState(4);
   const [sequencerCharacter, setSequencerCharacter] = useState("punch");
-  const [separateMode, setSeparateMode] = useState("htdemucs_6s");
+  const [separateMode, setSeparateMode] = useState("htdemucs");
   const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85, guitar: 85, piano: 85 });
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
   const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
@@ -5222,7 +5090,6 @@ export default function Page() {
   const [previewPosition, setPreviewPosition] = useState(null);
   const [editorDragMode, setEditorDragMode] = useState(null);
   const [analysisFile, setAnalysisFile] = useState(null);
-  const [trimWindowToast, setTrimWindowToast] = useState("");
 
   const audioRef = useRef(null);
   const currentAudioSourceRef = useRef({ id: null, url: "" });
@@ -5241,12 +5108,8 @@ export default function Page() {
   const sequencerSoloRef = useRef({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
   const sequencerLevelsRef = useRef({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85, guitar: 85, piano: 80 });
   const hasSequencerSoloRef = useRef(false);
-  const trimToastTimerRef = useRef(null);
   const stemWavUrlCacheRef = useRef({});
   const [wavDownloadBusyStem, setWavDownloadBusyStem] = useState("");
-  const [youtubeUrl, setYoutubeUrl] = useState("");
-  const [youtubeStatus, setYoutubeStatus] = useState("idle");
-  const [youtubeError, setYoutubeError] = useState("");
   const [extraTrackIds, setExtraTrackIds] = useState([]);
   const [extraTrackData, setExtraTrackData] = useState({});
   const [mixerView, setMixerView] = useState("separate");
@@ -5284,8 +5147,8 @@ export default function Page() {
   const [showSequencer, setShowSequencer] = useState(false);
 
   const visibleStems = useMemo(
-    () => separateMode === "htdemucs_6s" ? STEMS : STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano"),
-    [separateMode],
+    () => STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano"),
+    [],
   );
   const analyzingPatterns = patternStatus === "processing";
 
@@ -5640,25 +5503,6 @@ export default function Page() {
     trimStartRef.current = trimStart;
   }, [trimStart]);
 
-  const showTrimWindowLimitToast = useCallback(() => {
-    setTrimWindowToast(MAX_TRIM_WINDOW_TOAST);
-    if (trimToastTimerRef.current) {
-      clearTimeout(trimToastTimerRef.current);
-    }
-    trimToastTimerRef.current = setTimeout(() => {
-      setTrimWindowToast("");
-      trimToastTimerRef.current = null;
-    }, 2600);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (trimToastTimerRef.current) {
-        clearTimeout(trimToastTimerRef.current);
-      }
-    };
-  }, []);
-
   useEffect(() => {
     const audio = new Audio();
     audio.preload = "auto";
@@ -5780,14 +5624,11 @@ export default function Page() {
       const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       const time = ratio * editorDuration;
       const minGap = 0.05;
-      const maxWindow = Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration);
+      const maxWindow = editorDuration;
 
       if (drag.mode === "start") {
         const minStart = Math.max(0, trimEnd - maxWindow);
         const maxStart = Math.max(0, trimEnd - minGap);
-        if (time < minStart - 0.0001) {
-          showTrimWindowLimitToast();
-        }
         setTrimStart(clamp(time, minStart, maxStart));
         return;
       }
@@ -5795,9 +5636,6 @@ export default function Page() {
       if (drag.mode === "end") {
         const minEnd = Math.min(editorDuration, trimStart + minGap);
         const maxEnd = Math.max(minEnd, Math.min(editorDuration, trimStart + maxWindow));
-        if (time > maxEnd + 0.0001) {
-          showTrimWindowLimitToast();
-        }
         setTrimEnd(clamp(time, minEnd, maxEnd));
         return;
       }
@@ -5810,7 +5648,7 @@ export default function Page() {
         setTrimEnd(nextEnd);
       }
     },
-    [editorDuration, showTrimWindowLimitToast, trimEnd, trimStart],
+    [editorDuration, trimEnd, trimStart],
   );
 
   useEffect(() => {
@@ -5866,7 +5704,7 @@ export default function Page() {
       editorDragRef.current = {
         mode,
         pointerOffset: pointerTime - trimStart,
-        selectionLength: Math.min(Math.max(0.05, (trimEnd || editorDuration) - trimStart), Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration)),
+        selectionLength: Math.max(0.05, (trimEnd || editorDuration) - trimStart),
       };
       setEditorDragMode(mode);
       updateTrimFromPointer(event.clientX);
@@ -5889,7 +5727,7 @@ export default function Page() {
       setEditorError("");
       setEditorDuration(decoded.duration);
       setTrimStart(0);
-      setTrimEnd(Math.min(decoded.duration, MAX_TRIM_WINDOW_SECONDS));
+      setTrimEnd(decoded.duration);
       setFadeInMs(0);
       setFadeOutMs(0);
       setAnalysisFile(incoming);
@@ -6171,33 +6009,6 @@ export default function Page() {
     }
   };
 
-  const handleYoutubeDownload = async () => {
-    const urlTrimmed = youtubeUrl.trim();
-    if (!urlTrimmed || youtubeStatus === "loading") return;
-    setYoutubeStatus("loading");
-    setYoutubeError("");
-    try {
-      const res = await fetch("/api/youtube", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlTrimmed }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Error al descargar de YouTube");
-      }
-      const filename = res.headers.get("X-Filename") || "youtube_audio.mp3";
-      const blob = await res.blob();
-      const audioFile = new File([blob], filename, { type: "audio/mpeg" });
-      setYoutubeStatus("idle");
-      setYoutubeUrl("");
-      handleFile(audioFile);
-    } catch (err) {
-      setYoutubeStatus("error");
-      setYoutubeError(err.message || "Error al descargar de YouTube");
-    }
-  };
-
   const addExtraTrack = () => {
     const id = `extra-${Date.now()}`;
     setExtraTrackIds((prev) => [...prev, id]);
@@ -6257,8 +6068,7 @@ export default function Page() {
       const sourceFile = await buildEditedFile();
       setAnalysisFile(sourceFile);
 
-      const nextStems = await separateTrackViaModal(sourceFile, {
-        model: separateMode,
+      const nextStems = await separateTrackInBrowser(sourceFile, {
         onProgress: ({ progress: nextProgress, label }) => {
           if (Number.isFinite(nextProgress)) {
             setProgress(Math.max(3, Math.min(96, Math.round(nextProgress))));
@@ -6806,7 +6616,7 @@ export default function Page() {
           <input
             ref={fileRef}
             type="file"
-            accept=".wav,.mp3,.flac,.aif,.aiff,.m4a,.webm"
+            accept=".wav,.mp3"
             style={{ display: "none" }}
             onChange={(event) => handleFile(event.target.files[0])}
           />
@@ -6913,163 +6723,6 @@ export default function Page() {
           )}
         </div>
 
-        {SHOW_YOUTUBE_IMPORT && !file && (
-          <div style={{ marginBottom: 22 }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                marginBottom: 10,
-              }}
-            >
-              <div
-                style={{
-                  flex: 1,
-                  height: 1,
-                  background: "rgba(255,255,255,0.07)",
-                }}
-              />
-              <span
-                style={{
-                  fontSize: 10,
-                  fontFamily: "'Space Mono', monospace",
-                  color: "rgba(255,255,255,0.28)",
-                  letterSpacing: 1.5,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {t("youtube_or_link")}
-              </span>
-              <div
-                style={{
-                  flex: 1,
-                  height: 1,
-                  background: "rgba(255,255,255,0.07)",
-                }}
-              />
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                background: "rgba(255,40,40,0.04)",
-                border: `1px solid ${youtubeStatus === "error" ? "rgba(255,80,80,0.4)" : "rgba(255,80,80,0.14)"}`,
-                borderRadius: 12,
-                padding: "8px 10px 8px 14px",
-                transition: "border-color 0.2s",
-              }}
-            >
-              <svg
-                width="22"
-                height="16"
-                viewBox="0 0 22 16"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                style={{ flexShrink: 0 }}
-              >
-                <rect
-                  width="22"
-                  height="16"
-                  rx="3.5"
-                  fill="#FF0000"
-                  fillOpacity="0.85"
-                />
-                <polygon points="9,4 9,12 16,8" fill="white" />
-              </svg>
-
-              <input
-                type="url"
-                value={youtubeUrl}
-                onChange={(e) => {
-                  setYoutubeUrl(e.target.value);
-                  if (youtubeError) setYoutubeError("");
-                  if (youtubeStatus === "error") setYoutubeStatus("idle");
-                }}
-                onKeyDown={(e) => e.key === "Enter" && handleYoutubeDownload()}
-                placeholder={t("youtube_placeholder")}
-                disabled={youtubeStatus === "loading"}
-                style={{
-                  flex: 1,
-                  background: "transparent",
-                  border: "none",
-                  outline: "none",
-                  color: "rgba(255,255,255,0.82)",
-                  fontSize: 12,
-                  fontFamily: "'Space Mono', monospace",
-                  letterSpacing: 0.3,
-                  minWidth: 0,
-                  opacity: youtubeStatus === "loading" ? 0.5 : 1,
-                }}
-              />
-
-              <button
-                type="button"
-                onClick={handleYoutubeDownload}
-                disabled={!youtubeUrl.trim() || youtubeStatus === "loading"}
-                style={{
-                  background:
-                    youtubeStatus === "loading"
-                      ? "rgba(255,80,80,0.25)"
-                      : "rgba(255,80,80,0.16)",
-                  border: "1px solid rgba(255,80,80,0.32)",
-                  color:
-                    !youtubeUrl.trim() || youtubeStatus === "loading"
-                      ? "rgba(255,255,255,0.35)"
-                      : "rgba(255,255,255,0.85)",
-                  padding: "7px 14px",
-                  borderRadius: 8,
-                  cursor:
-                    !youtubeUrl.trim() || youtubeStatus === "loading"
-                      ? "not-allowed"
-                      : "pointer",
-                  fontSize: 10,
-                  fontFamily: "'Space Mono', monospace",
-                  letterSpacing: 1,
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                  transition: "all 0.2s",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                {youtubeStatus === "loading" && (
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 10,
-                      height: 10,
-                      border: "1.5px solid rgba(255,255,255,0.5)",
-                      borderTopColor: "rgba(255,255,255,0.9)",
-                      borderRadius: "50%",
-                      animation: "spin 0.7s linear infinite",
-                    }}
-                  />
-                )}
-                {youtubeStatus === "loading"
-                  ? t("youtube_downloading")
-                  : t("youtube_download_btn")}
-              </button>
-            </div>
-
-            {youtubeError && (
-              <div
-                style={{
-                  marginTop: 7,
-                  fontSize: 11,
-                  color: "rgba(255,100,100,0.9)",
-                  fontFamily: "'Space Mono', monospace",
-                  letterSpacing: 0.3,
-                }}
-              >
-                {youtubeError}
-              </div>
-            )}
-          </div>
-        )}
 
         {error && (
           <div
@@ -7086,29 +6739,6 @@ export default function Page() {
             {error}
           </div>
         )}
-
-            {trimWindowToast && (
-              <div
-                style={{
-                  position: "fixed",
-                  top: 20,
-                  right: 20,
-                  background: "linear-gradient(135deg, rgba(232,197,71,0.28), rgba(232,197,71,0.12))",
-                  border: "1px solid rgba(232,197,71,0.45)",
-                  borderRadius: 12,
-                  padding: "14px 18px",
-                  fontSize: 13,
-                  color: "#e8c547",
-                  fontFamily: "'Space Mono', monospace",
-                  maxWidth: 280,
-                  zIndex: 9999,
-                  boxShadow: "0 4px 12px rgba(232,197,71,0.2)",
-                  animation: "slideIn 0.3s ease, slideOut 0.3s ease 2.3s",
-                }}
-              >
-                {trimWindowToast}
-              </div>
-            )}
 
         {editorError && (
           <div
@@ -7382,8 +7012,7 @@ export default function Page() {
               <div style={{ display: "grid", gap: 10, marginBottom: 10 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {[
-                    { id: "htdemucs_6s", label: "6S", hint: "6 stems · Vocals · Drums · Bass · Guitar · Piano · Other" },
-                    { id: "htdemucs_ft", label: "FT", hint: "4 stems · Vocals · Drums · Bass · Other · Fine-tuned" },
+                    { id: "htdemucs", label: "4S", hint: "4 stems · Vocals · Drums · Bass · Other" },
                   ].map((mode) => (
                     <button
                       key={mode.id}
