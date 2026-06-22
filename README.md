@@ -99,9 +99,13 @@ StemsGroove/
 │   └── globals.css
 ├── lib/
 │   ├── client-demixer.js   # Local in-browser HTDemucs pipeline (ONNX + STFT/iSTFT)
+│   ├── dsp-wasm.js         # Loader/driver for the Rust→WASM DSP core
 │   ├── i18n.js
 │   └── themes.js
-├── public/models/htdemucs/ # manifest.json + lightweight metadata
+├── rust-dsp/               # Rust crate (FFT/STFT/iSTFT) → WASM + build.sh + verify.mjs
+├── public/
+│   ├── models/htdemucs/    # manifest.json + lightweight metadata
+│   └── wasm/stems_dsp.wasm # compiled DSP core
 ├── scripts/dev-solo.cjs    # Dev server launcher
 ├── tools/                  # ONNX export helper + notes
 └── next.config.mjs
@@ -109,25 +113,41 @@ StemsGroove/
 
 ---
 
-## 🦀 Rust + WASM: evaluation
+## 🦀 Rust + WASM acceleration (STFT / iSTFT)
 
-The heaviest part of [lib/client-demixer.js](lib/client-demixer.js) is the pure-JS DSP around the model — FFT, STFT/iSTFT, windowing, padding and segment overlap-add. The ONNX inference itself already runs in optimized native/WASM/WebGPU kernels via `onnxruntime-web`, so it is **not** the candidate for a rewrite. A focused assessment:
+The FFT-heavy DSP that surrounds the model — radix-2 FFT, STFT/iSTFT, windowing,
+padding and the windowed overlap-add reconstruction — has been ported to a small
+Rust crate compiled to WebAssembly: [rust-dsp/](rust-dsp/) →
+[public/wasm/stems_dsp.wasm](public/wasm/stems_dsp.wasm). Orchestration
+(segmenting, overlap weighting) and ONNX inference stay in JS, since inference
+already runs in optimized ORT kernels and is not the part Rust can speed up.
 
-**Where Rust + WASM would help**
-- The hand-written radix-2 `fftInPlace`, `stft`, `istft` and the overlap-add loops are O(n·log n) over millions of samples in single-threaded JS. Rust compiled to WASM (with SIMD, and optionally an FFT crate like `rustfft`) would realistically cut that DSP time several-fold and reduce GC pressure from the many `Float32Array`/`Float64Array` allocations.
-- Deterministic, allocation-free hot loops are a natural fit for WASM.
+**How it's wired**
+- [lib/dsp-wasm.js](lib/dsp-wasm.js) loads the module and exposes `stft()` / `istft()`.
+- [lib/client-demixer.js](lib/client-demixer.js) calls them through `runStft` / `runIstft`
+  dispatchers that **fall back to the pure-JS implementation** when the WASM
+  module can't be loaded — so the app keeps working everywhere.
 
-**Where it would *not* move the needle**
-- Model inference dominates wall-clock time and is already accelerated by ORT. Rust can't speed that up.
-- `decodeAudioData`, `URL.createObjectURL` and WAV encoding are browser/IO bound.
+**Design choices**
+- No `wasm-bindgen`, no crates.io deps: a single `rustc` invocation builds a
+  freestanding `no_std` `cdylib` (~8 KB).
+- The module performs only `+ - * /`. The Hann window, FFT twiddle factors and
+  the sqrt-based normalization are precomputed in JS and passed in, so no libm /
+  transcendental functions are needed inside WASM.
+- Buffers live in WASM linear memory addressed by byte offset (**zero-copy** —
+  JS reads/writes the same bytes via typed-array views), managed by a tiny bump
+  allocator with `mark`/`release` checkpoints.
+- Internal math is f64 with f32 storage, mirroring the JS reference exactly.
+  `simd128` is enabled so LLVM can vectorize where possible.
 
-**Cost / trade-offs**
-- Adds a Rust toolchain + `wasm-pack`/`wasm-bindgen` build step and a `.wasm` artifact to ship and version.
-- Data marshalling across the JS↔WASM boundary must be zero-copy (shared memory views) to avoid eating the gains.
-- WASM SIMD/threads need the right COOP/COEP headers when threading is enabled.
-
-**Recommendation**
-- Worthwhile as a *targeted* optimization: port only the FFT/STFT/iSTFT + overlap-add into a small Rust crate exposing `stft(...)`/`istft(...)` over flat `Float32Array` buffers, keep orchestration and ORT in JS. Start by profiling a real track to confirm the DSP share of total time before investing — if inference is ~80%+ of the time, the user-visible win is modest and may not justify the added build complexity.
+**Build & verify**
+```bash
+rustup target add wasm32-unknown-unknown   # one-time
+bash rust-dsp/build.sh                      # → public/wasm/stems_dsp.wasm
+node rust-dsp/verify.mjs                     # WASM vs JS reference (expects PASS)
+```
+The verifier compares WASM output against the JS functions copied from
+`client-demixer.js` on a test signal; current max difference is `0.0` (bit-exact).
 
 ---
 
