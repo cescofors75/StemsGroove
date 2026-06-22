@@ -6,6 +6,21 @@ const nextConfig = {
     devtoolSegmentExplorer: false,
     browserDebugInfoInTerminal: false,
   },
+  // Cross-origin isolation enables SharedArrayBuffer, which lets onnxruntime-web
+  // run HTDemucs on multiple WASM threads (much faster than single-threaded).
+  // COEP "credentialless" still allows fetching the cross-origin .onnx model and
+  // ORT's CDN wasm without requiring CORP headers on them.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
+        ],
+      },
+    ];
+  },
   onDemandEntries: {
     // Keep entries alive longer in dev to avoid transient chunk-not-found on Windows.
     maxInactiveAge: 1000 * 60 * 60,
