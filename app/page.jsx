@@ -3096,6 +3096,8 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
   const mixPlayingRef = useRef(false);
   const mixPrevUrlsKeyRef = useRef("");
   const playbackRatesRef = useRef({});
+  const mixUiClockRef = useRef(0);
+  const mixMeterBufRef = useRef({});
 
   useEffect(() => { mixDurationRef.current = mixDuration; }, [mixDuration]);
   useEffect(() => { mixMutedRef.current = trackMuted; }, [trackMuted]);
@@ -3250,14 +3252,23 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
   }, []);
 
   const mixStartRaf = useCallback(() => {
+    // Cancel any loop already running so concurrent rAF loops can't accumulate
+    // (each one would call setState every frame → "Maximum update depth").
+    mixStopRaf();
+    const UI_INTERVAL = 1 / 15; // throttle React updates to ~15fps
+
     const loop = () => {
       const ctx = mixAudioCtxRef.current;
-      if (!ctx || ctx.state === "closed") return;
+      if (!ctx || ctx.state === "closed") {
+        mixRafRef.current = null;
+        return;
+      }
       const elapsed = ctx.currentTime - mixStartTimeRef.current;
       const dur = mixDurationRef.current;
       const t = Math.min(Math.max(0, elapsed), dur);
 
       if (t >= dur - 0.05 && dur > 0) {
+        mixRafRef.current = null;
         setMixTime(0);
         setMixPlaying(false);
         mixPauseOffsetRef.current = 0;
@@ -3268,20 +3279,29 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
         return;
       }
 
-      setMixTime(t);
+      // Only push state at ~15fps; the canvas/playhead don't need a full
+      // re-render of this large subtree on every animation frame.
+      if (ctx.currentTime - mixUiClockRef.current >= UI_INTERVAL) {
+        mixUiClockRef.current = ctx.currentTime;
+        setMixTime(t);
 
-      const nm = {};
-      Object.entries(mixAnalyserNodesRef.current).forEach(([id, analyser]) => {
-        const data = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteTimeDomainData(data);
-        let peak = 0;
-        for (let i = 0; i < data.length; i += 1) {
-          const v = Math.abs(data[i] / 128 - 1);
-          if (v > peak) peak = v;
-        }
-        nm[id] = peak;
-      });
-      setMeters(nm);
+        const nm = {};
+        Object.entries(mixAnalyserNodesRef.current).forEach(([id, analyser]) => {
+          let data = mixMeterBufRef.current[id];
+          if (!data || data.length !== analyser.frequencyBinCount) {
+            data = new Uint8Array(analyser.frequencyBinCount);
+            mixMeterBufRef.current[id] = data;
+          }
+          analyser.getByteTimeDomainData(data);
+          let peak = 0;
+          for (let i = 0; i < data.length; i += 1) {
+            const v = Math.abs(data[i] / 128 - 1);
+            if (v > peak) peak = v;
+          }
+          nm[id] = peak;
+        });
+        setMeters(nm);
+      }
 
       mixRafRef.current = requestAnimationFrame(loop);
     };
