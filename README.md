@@ -87,6 +87,27 @@ The whole separation flow lives in [lib/client-demixer.js](lib/client-demixer.js
 
 This keeps the frontend bundle small while serving the model as a static asset the browser downloads once.
 
+### Optional: quantized (int8) model for the CPU/WASM fallback
+
+WebGPU runs the full-precision model fastest, but on machines where WebGPU is
+unavailable (some Windows GPUs/drivers) the app falls back to CPU via WASM,
+which is slower for full-precision HTDemucs. An **int8-quantized** model is ~4×
+smaller and notably faster on CPU. The WebGPU execution provider does **not**
+run int8 graphs well, so the quantized model is used **only on the WASM path**;
+WebGPU machines keep using the fp32 model. The selection is automatic.
+
+To enable it:
+
+```bash
+# produces public/models/htdemucs/htdemucs.onnx and htdemucs.int8.onnx
+python tools/export_htdemucs_onnx.py --model htdemucs --quantize
+```
+
+Then host `htdemucs.int8.onnx` on your static storage and point
+`modelUrlQuantized` in [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json)
+at it (leave it `null` to keep fp32 everywhere). The console log prints the
+active variant: `engine=WASM ×8 · model=int8 · …`.
+
 ---
 
 ## 🗂️ Project Structure

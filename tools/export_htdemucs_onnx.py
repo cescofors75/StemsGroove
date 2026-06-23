@@ -200,15 +200,50 @@ def export_model(model_name: str, output_path: Path, meta_path: Path, opset: int
         ) from exc
 
 
+def quantize_model(fp32_path: Path, quant_path: Path) -> None:
+    """Genera una variante int8 (dynamic quantization) del modelo fp32.
+
+    La cuantizacion dinamica int8 reduce el tamano ~4x y acelera la inferencia
+    en CPU/WASM, que es el camino de respaldo cuando WebGPU no esta disponible.
+    El EP WebGPU de onnxruntime-web no ejecuta bien grafos int8, por eso esta
+    variante solo se usa en el path WASM (ver lib/client-demixer.js).
+    """
+    try:
+        from onnxruntime.quantization import quantize_dynamic, QuantType
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            "Para cuantizar necesitas onnxruntime instalado (pip install onnxruntime).\n"
+            f"Detalle: {exc}"
+        ) from exc
+
+    quant_path.parent.mkdir(parents=True, exist_ok=True)
+    quantize_dynamic(
+        model_input=str(fp32_path),
+        model_output=str(quant_path),
+        weight_type=QuantType.QInt8,
+    )
+    print(f"Modelo cuantizado int8 escrito en: {quant_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Exporta HTDemucs a ONNX core para navegador")
     parser.add_argument("--model", default="htdemucs", choices=["htdemucs", "htdemucs_ft", "htdemucs_6s", "hdemucs_mmi"])
     parser.add_argument("--output", default="public/models/htdemucs/htdemucs.onnx")
     parser.add_argument("--meta", default="public/models/htdemucs/htdemucs.json")
     parser.add_argument("--opset", type=int, default=17)
+    parser.add_argument(
+        "--quantize",
+        action="store_true",
+        help="Genera tambien una variante int8 (<output>.int8.onnx) para el path WASM/CPU.",
+    )
     args = parser.parse_args()
 
-    export_model(args.model, Path(args.output), Path(args.meta), args.opset)
+    output_path = Path(args.output)
+    export_model(args.model, output_path, Path(args.meta), args.opset)
+
+    if args.quantize:
+        quant_path = output_path.with_suffix(".int8.onnx")
+        quantize_model(output_path, quant_path)
 
 
 if __name__ == "__main__":

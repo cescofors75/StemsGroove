@@ -3,6 +3,7 @@
   "name": "htdemucs-browser-core",
   "format": "onnx-core",
   "modelUrl": "https://g3oq85ommwthphve.public.blob.vercel-storage.com/htdemucs.onnx",
+  "modelUrlQuantized": null,
   "metaUrl": "/models/htdemucs/htdemucs.json",
   "stems": ["vocals", "drums", "bass", "other"],
   "sampleRate": 44100,
