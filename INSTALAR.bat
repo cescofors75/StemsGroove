@@ -61,7 +61,7 @@ echo.
 echo [3/4] Instalando el motor de separacion Demucs...
 echo       (puede tardar varios minutos la primera vez)
 ".venv\Scripts\python.exe" -m pip install --upgrade pip
-".venv\Scripts\python.exe" -m pip install demucs
+".venv\Scripts\python.exe" -m pip install "numpy<2" demucs
 if errorlevel 1 (
   echo [ERROR] No se pudo instalar Demucs. Revisa tu conexion a internet
   echo e intenta ejecutar INSTALAR.bat de nuevo.

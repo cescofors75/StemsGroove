@@ -60,7 +60,7 @@ echo
 echo "[3/4] Instalando el motor de separacion Demucs..."
 echo "      (puede tardar varios minutos la primera vez)"
 ".venv/bin/python3" -m pip install --upgrade pip
-".venv/bin/python3" -m pip install demucs
+".venv/bin/python3" -m pip install "numpy<2" demucs
 
 echo
 read -r -p "Tienes GPU NVIDIA y quieres separar mas rapido con CUDA? [s/N] " usegpu

@@ -62,7 +62,7 @@ npm install
 
 # Python virtual environment + demucs
 py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install demucs
+.venv\Scripts\python.exe -m pip install "numpy<2" demucs
 
 # (Optional) CUDA-accelerated PyTorch for NVIDIA GPUs
 .venv\Scripts\python.exe -m pip install --force-reinstall torch torchaudio ^
@@ -223,8 +223,8 @@ MIT
 
 ```bash
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install demucs   # Windows
-# .venv/bin/python3 -m pip install demucs        # macOS/Linux
+.venv\Scripts\python.exe -m pip install "numpy<2" demucs   # Windows
+# .venv/bin/python3 -m pip install "numpy<2" demucs        # macOS/Linux
 ```
 
 Nota: En este proyecto, Demucs se ejecuta desde la API de Next.js usando `python -m demucs.separate`.
