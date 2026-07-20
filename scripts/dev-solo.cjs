@@ -12,8 +12,9 @@ function normalizeWindowsDriveCase(inputPath) {
 const projectDir = normalizeWindowsDriveCase(fs.realpathSync(path.resolve(__dirname, "..")));
 
 if (process.platform === "win32") {
+  const projectFolderName = path.basename(projectDir);
   const killCmd =
-    "$procs = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'next dev' -and $_.CommandLine -match 'Sterms' }; foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force }";
+    `$procs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'next dev' -and $_.CommandLine -match [regex]::Escape('${projectFolderName}') }; foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force }`;
   spawnSync("powershell.exe", ["-NoProfile", "-Command", killCmd], { stdio: "inherit" });
 }
 

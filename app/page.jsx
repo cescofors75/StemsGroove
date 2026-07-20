@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { separateTrackViaModal } from "../lib/modal-separator.js";
+import { separateTrackLocally } from "../lib/local-separator.js";
 import { getT, LOCALES } from "../lib/i18n.js";
 import { THEMES, THEME_ORDER } from "../lib/themes.js";
 
@@ -64,7 +65,7 @@ const STEMS = [
 
 const ACCEPT_AUDIO = /\.(wav|mp3|flac|m4a|webm|aiff?)$/i;
 const MAX_TRIM_WINDOW_SECONDS = 300;
-const MAX_TRIM_WINDOW_TOAST = "Chicos que vale un .002€ cada vez. jajajajja.";
+const MAX_TRIM_WINDOW_TOAST = "Selección máxima: 5 minutos por track.";
 const SHOW_STEM_PLAYERS = false;
 const SHOW_SEQUENCER_PANEL = false;
 const SHOW_GROOVE_COMPARISON = false;
@@ -4393,6 +4394,15 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+function revokeStemUrls(stemMap) {
+  if (!stemMap) return;
+  Object.values(stemMap).forEach((url) => {
+    if (typeof url === "string" && url.startsWith("blob:")) {
+      URL.revokeObjectURL(url);
+    }
+  });
+}
+
 function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = true, accentColor, t }) {
   const [file, setFile] = useState(null);
   const [originalUrl, setOriginalUrl] = useState("");
@@ -4403,6 +4413,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   const [stems, setStems] = useState({});
   const [trackBpm, setTrackBpm] = useState(null);
   const [separateMode, setSeparateMode] = useState("htdemucs_6s");
+  const [engine, setEngine] = useState("local");
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubeStatus, setYoutubeStatus] = useState("idle");
   const [youtubeError, setYoutubeError] = useState("");
@@ -4540,7 +4551,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setFile(incoming);
     setOriginalUrl(URL.createObjectURL(incoming));
-    setStems({});
+    setStems((prev) => { revokeStemUrls(prev); return {}; });
     setTrackBpm(null);
     sourceBufferRef.current = null;
     waveformMonoRef.current = null;
@@ -4613,14 +4624,15 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
       const sourceFile = await buildEditedFile();
       const detectedBpm = await estimateBpmFromFile(sourceFile).catch(() => null);
       setTrackBpm(detectedBpm);
-      const nextStems = await separateTrackViaModal(sourceFile, {
+      const separate = engine === "local" ? separateTrackLocally : separateTrackViaModal;
+      const nextStems = await separate(sourceFile, {
         model: separateMode,
         onProgress: ({ progress: p, label }) => {
           if (Number.isFinite(p)) setProgress(Math.max(3, Math.min(96, Math.round(p))));
           if (label) setCurrentStep(label);
         },
       });
-      setStems(nextStems || {});
+      setStems((prev) => { revokeStemUrls(prev); return nextStems || {}; });
       setProgress(100);
       setCurrentStep("Stems ready");
       setStatus("done");
@@ -4647,7 +4659,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     setEditorLoading(false);
     setStatus("idle");
     setProgress(0);
-    setStems({});
+    setStems((prev) => { revokeStemUrls(prev); return {}; });
     setTrackBpm(null);
     setError("");
     setCurrentStep("");
@@ -4975,6 +4987,32 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
             ))}
           </div>
 
+          <div style={{ display: "flex", gap: 5, flexShrink: 0 }} title="LOCAL: usa Python/Demucs en tu equipo, sin internet. NUBE: usa el servidor remoto Modal.">
+            {[
+              { id: "local", label: "LOCAL" },
+              { id: "cloud", label: "NUBE" },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setEngine(opt.id)}
+                style={{
+                  border: `1px solid ${engine === opt.id ? accentColor : "rgba(255,255,255,0.2)"}`,
+                  color: engine === opt.id ? accentColor : "rgba(255,255,255,0.7)",
+                  background: "transparent",
+                  borderRadius: 999,
+                  fontSize: 10,
+                  letterSpacing: 1,
+                  padding: "4px 9px",
+                  cursor: "pointer",
+                  fontFamily: "'Space Mono', monospace",
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <button
             type="button"
             onClick={processTrack}
@@ -5206,6 +5244,7 @@ export default function Page() {
   const [patternBars, setPatternBars] = useState(4);
   const [sequencerCharacter, setSequencerCharacter] = useState("punch");
   const [separateMode, setSeparateMode] = useState("htdemucs_6s");
+  const [engine, setEngine] = useState("local");
   const [volumes, setVolumes] = useState({ vocals: 85, drums: 85, bass: 85, other: 85, guitar: 85, piano: 85 });
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
   const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
@@ -5260,13 +5299,16 @@ export default function Page() {
   useEffect(() => {
     const savedLocale = localStorage.getItem("sterms_locale");
     const savedTheme = localStorage.getItem("sterms_theme");
+    const savedEngine = localStorage.getItem("sterms_engine");
     if (savedLocale && LOCALES.some((l) => l.id === savedLocale)) setLocale(savedLocale);
     if (savedTheme && THEMES[savedTheme]) setThemeName(savedTheme);
+    if (savedEngine === "local" || savedEngine === "cloud") setEngine(savedEngine);
   }, []);
 
   // Persist to localStorage
   useEffect(() => { localStorage.setItem("sterms_locale", locale); }, [locale]);
   useEffect(() => { localStorage.setItem("sterms_theme", themeName); }, [themeName]);
+  useEffect(() => { localStorage.setItem("sterms_engine", engine); }, [engine]);
 
   const theme = THEMES[themeName] || THEMES.dark;
   const accentColor = theme.accent;
@@ -5300,7 +5342,7 @@ export default function Page() {
 
   const modeLabel = separateMode.toUpperCase();
 
-  const engineLabel = "BROWSER";
+  const engineLabel = engine === "local" ? "LOCAL" : "NUBE";
 
   const baseName = useMemo(() => {
     if (!file) {
@@ -6074,7 +6116,7 @@ export default function Page() {
     setStatus("idle");
     setProgress(0);
     setCurrentStep("");
-    setStems({});
+    setStems((prev) => { revokeStemUrls(prev); return {}; });
     setPatterns({});
     setPatternBpm(null);
     setPatternStatus("idle");
@@ -6148,7 +6190,7 @@ export default function Page() {
     setProgress(0);
     setCurrentStep("");
     setError("");
-    setStems({});
+    setStems((prev) => { revokeStemUrls(prev); return {}; });
     setPatterns({});
     setPatternBpm(null);
     setPatternStatus("idle");
@@ -6207,16 +6249,20 @@ export default function Page() {
     setExtraTrackIds((prev) => prev.filter((t) => t !== id));
     setExtraTrackData((prev) => {
       const next = { ...prev };
+      revokeStemUrls(next[id]?.stems);
       delete next[id];
       return next;
     });
   }, []);
 
   const handleExtraStemsChange = useCallback((trackId, trackStems, name, bpm) => {
-    setExtraTrackData((prev) => ({
-      ...prev,
-      [trackId]: { stems: trackStems, name, bpm },
-    }));
+    setExtraTrackData((prev) => {
+      const previousStems = prev[trackId]?.stems;
+      if (previousStems && previousStems !== trackStems) {
+        revokeStemUrls(previousStems);
+      }
+      return { ...prev, [trackId]: { stems: trackStems, name, bpm } };
+    });
   }, []);
 
   const processTrack = async () => {
@@ -6257,7 +6303,8 @@ export default function Page() {
       const sourceFile = await buildEditedFile();
       setAnalysisFile(sourceFile);
 
-      const nextStems = await separateTrackViaModal(sourceFile, {
+      const separate = engine === "local" ? separateTrackLocally : separateTrackViaModal;
+      const nextStems = await separate(sourceFile, {
         model: separateMode,
         onProgress: ({ progress: nextProgress, label }) => {
           if (Number.isFinite(nextProgress)) {
@@ -6269,15 +6316,17 @@ export default function Page() {
         },
       });
 
-      setStems(nextStems || {});
+      setStems((prev) => { revokeStemUrls(prev); return nextStems || {}; });
       setProgress(100);
       setCurrentStep("Stems ready");
       setStatus("done");
-      await createPatterns(sourceFile, nextStems || {});
+      if (SHOW_SEQUENCER_PANEL) {
+        await createPatterns(sourceFile, nextStems || {});
+      }
     } catch (processingError) {
       setStatus("error");
       setPlaying(null);
-      setStems({});
+      setStems((prev) => { revokeStemUrls(prev); return {}; });
       setError(processingError instanceof Error ? processingError.message : "Error desconocido");
     } finally {
       clearInterval(ticker);
@@ -7407,8 +7456,36 @@ export default function Page() {
                   ))}
                 </div>
 
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }} title="LOCAL: usa Python/Demucs en tu equipo, sin internet. NUBE: usa el servidor remoto Modal.">
+                  {[
+                    { id: "local", label: "MOTOR: LOCAL (SIN INTERNET)" },
+                    { id: "cloud", label: "MOTOR: NUBE" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setEngine(opt.id)}
+                      style={{
+                        border: `1px solid ${engine === opt.id ? accentColor : "rgba(255,255,255,0.2)"}`,
+                        color: engine === opt.id ? accentColor : "rgba(255,255,255,0.7)",
+                        background: "transparent",
+                        borderRadius: 999,
+                        padding: "6px 11px",
+                        fontSize: 10,
+                        cursor: "pointer",
+                        fontFamily: "'Space Mono', monospace",
+                        letterSpacing: 1,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
-                  {t("processing_remote")}
+                  {engine === "local"
+                    ? "Motor local: separa el audio con Demucs en tu propio equipo, sin enviar nada a internet. Requiere haber ejecutado el instalador (install.bat / install.sh)."
+                    : t("processing_remote")}
                 </div>
               </div>
             )}

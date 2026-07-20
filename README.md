@@ -7,6 +7,8 @@
 
 ![preview](preview.png)
 
+**🎧 DJ or producer and just want it running? → [GUIA-DJS.md](GUIA-DJS.md)**
+
 </div>
 
 ---
@@ -17,10 +19,10 @@
 - 🥁 **Drums** — kick, snare, hats and all percussion
 - 🎸 **Bass** — bass guitar and low-frequency content
 - 🎹 **Other** — guitars, synths and remaining layers
+- 💻 **Fully local engine** — runs Demucs on your own machine (`INSTALAR.bat` / `instalar.sh`), no internet required after install
+- ☁️ **Optional cloud engine** — remote separation via Modal, for machines without Python installed
 - ⚡ **GPU-accelerated** — uses CUDA automatically when a NVIDIA GPU is detected
-- 🎛️ **3 quality modes** — Fast (`mdx_extra`), Balanced & Quality (`htdemucs`)
-- 🧪 **Browser engine** — HTDemucs ONNX runs client-side and is ready for Vercel-friendly hosting
-- 🎵 **Sequencer pattern view** — visual beat grid extracted from each stem, with BPM detection
+- 🎛️ **6S / 4S modes** — 6 stems (adds guitar & piano) or 4 stems, faster
 - 📡 **REST API with CORS** — integrate from any frontend project
 - 🔊 **Per-stem volume control** — independent sliders per stem
 - ⬇️ **MP3 download** — one click per stem
@@ -28,6 +30,20 @@
 ---
 
 ## 🚀 Quick Start
+
+### Easiest way: the installer
+
+If you just want the app running locally with zero fuss (recommended
+for DJs/producers — see [GUIA-DJS.md](GUIA-DJS.md)):
+
+- **Windows:** double-click `INSTALAR.bat`, then `INICIAR.bat` on later runs.
+- **macOS/Linux:** run `./instalar.sh`, then `./iniciar.sh` on later runs.
+
+These scripts install Node deps, create a Python venv, install Demucs
+and launch the app at `http://localhost:3000` — fully offline after
+the first install.
+
+### Manual install
 
 ### Prerequisites
 
@@ -61,6 +77,10 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) 🎉
 
+The UI lets you pick between the **LOCAL** engine (runs Demucs on
+your machine via `/api/separate`, no internet needed) and the
+**NUBE/cloud** engine (remote Modal endpoint, useful as a fallback).
+
 ---
 
 ## 📡 REST API
@@ -74,7 +94,7 @@ Accepts a `multipart/form-data` request and returns URLs for each stem.
 ```js
 const form = new FormData();
 form.append("file", audioFile);     // .wav | .mp3 | .flac | .aiff
-form.append("mode", "balanced");    // "fast" | "balanced" | "quality"
+form.append("mode", "htdemucs_6s"); // "htdemucs" | "htdemucs_6s" | "htdemucs_ft" | "mdx_extra"
 
 const res = await fetch("http://localhost:3000/api/separate", {
   method: "POST",
@@ -113,11 +133,14 @@ Without this variable all origins (`*`) are allowed.
 
 ## 🧠 Processing Modes
 
-| Mode | Model | MP3 Bitrate | Speed | Quality |
-|---|---|---|---|---|
-| `fast` | `mdx_extra` | 192 kbps | ⚡⚡⚡ | ★★★☆☆ |
-| `balanced` | `htdemucs` | 224 kbps | ⚡⚡ | ★★★★☆ |
-| `quality` | `htdemucs` | 320 kbps | ⚡ | ★★★★★ |
+| Mode | Model | Stems | Speed |
+|---|---|---|---|
+| `htdemucs` | HTDemucs | 4 (vocals/drums/bass/other) | ⚡⚡ |
+| `htdemucs_ft` | HTDemucs fine-tuned | 4 | ⚡ |
+| `htdemucs_6s` | HTDemucs 6-stem | 6 (adds guitar/piano) | ⚡⚡ |
+| `mdx_extra` | MDX Extra | 4 | ⚡⚡⚡ |
+
+All stems are exported as 224 kbps MP3.
 
 > GPU (CUDA): ~30-60 s/track · CPU only: ~5-10 min/track
 
@@ -139,6 +162,9 @@ stems/
 │   └── cors.js                        # CORS helper (shared by API routes)
 ├── scripts/
 │   └── dev-solo.cjs                   # Dev server launcher
+├── INSTALAR.bat / instalar.sh         # One-click installer (Node + Python + Demucs)
+├── INICIAR.bat / iniciar.sh           # Daily launcher (after install)
+├── GUIA-DJS.md                        # Non-technical guide for DJs/producers
 ├── .venv/                             # Python 3.12 venv (git-ignored)
 ├── .stems/                            # Temporary stem output (git-ignored)
 └── next.config.mjs
@@ -166,19 +192,7 @@ Browser  ──POST /api/separate──▶  Next.js Route Handler
 Browser  ──GET /api/stems/<runId>/vocals──▶  streams audio/mpeg
 ```
 
-### Browser deployment
-
-The separation flow now runs in the browser through [lib/client-demixer.js](lib/client-demixer.js) and reads its runtime configuration from [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json).
-
-Recommended deployment layout:
-
-1. Keep the repository light and do not commit the `.onnx` model file.
-2. Export the model offline with `tools/export_htdemucs_onnx.py`.
-3. Host the generated `.onnx` file on external static storage such as a CDN, GitHub Releases, Hugging Face or similar.
-4. Point `modelUrl` in [public/models/htdemucs/manifest.json](public/models/htdemucs/manifest.json) to that external URL.
-5. Keep [public/models/htdemucs/htdemucs.json](public/models/htdemucs/htdemucs.json) in the repo as lightweight metadata.
-
-This avoids pushing a 100MB+ model into git while keeping Vercel deployment simple: frontend bundle plus lightweight static metadata.
+An optional cloud fallback (`lib/modal-separator.js` + `tools/modal_demucs_separator.py`) runs the same Demucs separation on a remote [Modal](https://modal.com) endpoint for machines that can't install Python/Demucs locally. Select it with the **NUBE** toggle in the UI; it requires setting `NEXT_PUBLIC_MODAL_SEPARATE_URL`.
 
 ---
 
@@ -199,13 +213,18 @@ MIT
 ## Requisitos
 
 - Node.js 18+
-- Python 3.9+
+- Python 3.9+ (recomendado 3.12)
 - `ffmpeg` disponible en PATH
+
+> Atajo: `INSTALAR.bat` (Windows) o `./instalar.sh` (macOS/Linux) hacen
+> todo esto automaticamente. Ver [GUIA-DJS.md](GUIA-DJS.md).
 
 ## 1) Instalar dependencias de Python
 
 ```bash
-pip install demucs fastapi uvicorn python-multipart
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install demucs   # Windows
+# .venv/bin/python3 -m pip install demucs        # macOS/Linux
 ```
 
 Nota: En este proyecto, Demucs se ejecuta desde la API de Next.js usando `python -m demucs.separate`.

@@ -10,7 +10,7 @@ const YT_REGEX =
 function sanitizeFilename(name) {
   return (
     name
-      .replace(/[^\w\s.\-()[\]]/g, "")
+      .replace(/[^\p{L}\p{N}\s.\-()[\]]/gu, "")
       .replace(/\s+/g, "_")
       .replace(/_{2,}/g, "_")
       .slice(0, 100)
