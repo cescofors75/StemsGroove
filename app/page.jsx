@@ -67,8 +67,6 @@ const ACCEPT_AUDIO = /\.(wav|mp3|flac|m4a|webm|aiff?)$/i;
 const MAX_TRIM_WINDOW_SECONDS = 300;
 const MAX_TRIM_WINDOW_TOAST = "Selección máxima: 5 minutos por track.";
 const SHOW_STEM_PLAYERS = false;
-const SHOW_SEQUENCER_PANEL = false;
-const SHOW_GROOVE_COMPARISON = false;
 const SHOW_YOUTUBE_IMPORT = false;
 
 const STEP_MAP = [
@@ -3100,6 +3098,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
   const mixPlayingRef = useRef(false);
   const mixPrevUrlsKeyRef = useRef("");
   const playbackRatesRef = useRef({});
+  const isHoveredRef = useRef(false);
 
   useEffect(() => { mixDurationRef.current = mixDuration; }, [mixDuration]);
   useEffect(() => { mixMutedRef.current = trackMuted; }, [trackMuted]);
@@ -3387,10 +3386,13 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
     await mixStartPlayback(mixPauseOffsetRef.current);
   }, [mixStartPlayback, mixStopPlayback, onStopOtherPlayback]);
 
-  // Spacebar = play / pause (solo cuando el mixer está expandido)
+  // Spacebar = play / pause (solo cuando el mixer está expandido, en pantalla
+  // completa, o el cursor esta sobre este mixer en concreto — evita que una
+  // sola pulsacion dispare varios mixers a la vez cuando hay varias pistas).
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e) => {
+      if (!fullscreen && !isHoveredRef.current) return;
       if (e.code === "Space" && !(["INPUT","TEXTAREA","SELECT","BUTTON","A"].includes(e.target.tagName) || e.target.isContentEditable)) {
         e.preventDefault();
         handleMixPlay();
@@ -3398,7 +3400,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [expanded, handleMixPlay]);
+  }, [expanded, fullscreen, handleMixPlay]);
 
   const handleMixStop = useCallback(() => {
     mixStopPlayback();
@@ -3552,6 +3554,8 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
 
   return (
     <div
+      onMouseEnter={() => { isHoveredRef.current = true; }}
+      onMouseLeave={() => { isHoveredRef.current = false; }}
       style={{
         marginBottom: fullscreen ? 0 : 24,
         background: fullscreen
@@ -4403,6 +4407,160 @@ function revokeStemUrls(stemMap) {
   });
 }
 
+// Shared trim/fade waveform editor logic used by both TrackSlot and Page.
+// Handles drag-to-trim, fade in/out, decoding the source buffer and
+// rendering the edited (trimmed + faded) File used before separation.
+function useTrimEditor({ onTrimClamped, onBufferLoaded, previewPosition = null } = {}) {
+  const [editorDuration, setEditorDuration] = useState(0);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [fadeInMs, setFadeInMs] = useState(0);
+  const [fadeOutMs, setFadeOutMs] = useState(0);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorError, setEditorError] = useState("");
+  const [editorDragMode, setEditorDragMode] = useState(null);
+  const canvasRef = useRef(null);
+  const dragRef = useRef(null);
+  const sourceBufferRef = useRef(null);
+  const waveformMonoRef = useRef(null);
+
+  useEffect(() => {
+    drawEditorWaveform(canvasRef.current, waveformMonoRef.current, trimStart, trimEnd || editorDuration, editorDuration, previewPosition);
+  }, [editorDuration, previewPosition, trimEnd, trimStart]);
+
+  const updateTrimFromPointer = useCallback((clientX) => {
+    const canvas = canvasRef.current;
+    const drag = dragRef.current;
+    if (!canvas || !drag || !editorDuration) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    const time = ratio * editorDuration;
+    const minGap = 0.05;
+    const maxWindow = Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration);
+
+    if (drag.mode === "start") {
+      const minStart = Math.max(0, trimEnd - maxWindow);
+      const maxStart = Math.max(0, trimEnd - minGap);
+      if (time < minStart - 0.0001) onTrimClamped?.();
+      setTrimStart(clamp(time, minStart, maxStart));
+      return;
+    }
+    if (drag.mode === "end") {
+      const minEnd = Math.min(editorDuration, trimStart + minGap);
+      const maxEnd = Math.max(minEnd, Math.min(editorDuration, trimStart + maxWindow));
+      if (time > maxEnd + 0.0001) onTrimClamped?.();
+      setTrimEnd(clamp(time, minEnd, maxEnd));
+      return;
+    }
+    if (drag.mode === "move") {
+      const lockedSelection = Math.min(drag.selectionLength, maxWindow);
+      const nextStart = clamp(time - drag.pointerOffset, 0, Math.max(0, editorDuration - lockedSelection));
+      setTrimStart(nextStart);
+      setTrimEnd(Math.min(editorDuration, nextStart + lockedSelection));
+    }
+  }, [editorDuration, onTrimClamped, trimEnd, trimStart]);
+
+  useEffect(() => {
+    if (!editorDragMode) return undefined;
+    const handlePointerMove = (event) => updateTrimFromPointer(event.clientX);
+    const handlePointerUp = () => {
+      dragRef.current = null;
+      setEditorDragMode(null);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [editorDragMode, updateTrimFromPointer]);
+
+  const beginEditorDrag = useCallback((event) => {
+    if (editorLoading || !editorDuration || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const pointerX = clamp(event.clientX - rect.left, 0, rect.width);
+    const startX = (trimStart / editorDuration) * rect.width;
+    const endX = ((trimEnd || editorDuration) / editorDuration) * rect.width;
+    const handleZone = 16;
+    let mode = null;
+    if (Math.abs(pointerX - startX) <= handleZone) mode = "start";
+    else if (Math.abs(pointerX - endX) <= handleZone) mode = "end";
+    else if (pointerX > startX && pointerX < endX) mode = "move";
+    if (!mode) return;
+
+    event.preventDefault();
+    const pointerTime = (pointerX / Math.max(1, rect.width)) * editorDuration;
+    dragRef.current = {
+      mode,
+      pointerOffset: pointerTime - trimStart,
+      selectionLength: Math.min(Math.max(0.05, (trimEnd || editorDuration) - trimStart), Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration)),
+    };
+    setEditorDragMode(mode);
+    updateTrimFromPointer(event.clientX);
+  }, [editorDuration, editorLoading, trimEnd, trimStart, updateTrimFromPointer]);
+
+  const loadEditorBuffer = useCallback(async (incoming) => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error("Tu navegador no soporta Web Audio para previsualizar el archivo.");
+    const context = new AudioContextClass();
+    try {
+      const arrayBuffer = await incoming.arrayBuffer();
+      const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
+      sourceBufferRef.current = decoded;
+      waveformMonoRef.current = mixToMono(decoded);
+      setEditorError("");
+      setEditorDuration(decoded.duration);
+      setTrimStart(0);
+      setTrimEnd(Math.min(decoded.duration, MAX_TRIM_WINDOW_SECONDS));
+      setFadeInMs(0);
+      setFadeOutMs(0);
+      onBufferLoaded?.(incoming);
+      return true;
+    } finally {
+      await context.close();
+    }
+  }, [onBufferLoaded]);
+
+  const buildEditedFile = useCallback(async (file, baseName) => {
+    if (!file || !sourceBufferRef.current) return file;
+    const safeEnd = Math.max(trimStart + 0.05, trimEnd || editorDuration || trimStart + 0.05);
+    const editedBuffer = renderEditedBuffer(sourceBufferRef.current, trimStart, safeEnd, fadeInMs / 1000, fadeOutMs / 1000);
+    const blob = audioBufferToWavBlob(editedBuffer);
+    return new File([blob], `${baseName || "track"}-edit.wav`, { type: "audio/wav" });
+  }, [editorDuration, fadeInMs, fadeOutMs, trimEnd, trimStart]);
+
+  const resetEditor = useCallback(() => {
+    sourceBufferRef.current = null;
+    waveformMonoRef.current = null;
+    setEditorDuration(0);
+    setTrimStart(0);
+    setTrimEnd(0);
+    setFadeInMs(0);
+    setFadeOutMs(0);
+    setEditorError("");
+    setEditorLoading(false);
+  }, []);
+
+  return {
+    editorDuration,
+    trimStart, setTrimStart,
+    trimEnd, setTrimEnd,
+    fadeInMs, setFadeInMs,
+    fadeOutMs, setFadeOutMs,
+    editorLoading, setEditorLoading,
+    editorError, setEditorError,
+    editorDragMode,
+    canvasRef,
+    sourceBufferRef,
+    waveformMonoRef,
+    beginEditorDrag,
+    loadEditorBuffer,
+    buildEditedFile,
+    resetEditor,
+  };
+}
+
 function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = true, accentColor, t }) {
   const [file, setFile] = useState(null);
   const [originalUrl, setOriginalUrl] = useState("");
@@ -4418,126 +4576,20 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
   const [youtubeStatus, setYoutubeStatus] = useState("idle");
   const [youtubeError, setYoutubeError] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [editorDuration, setEditorDuration] = useState(0);
-  const [trimStart, setTrimStart] = useState(0);
-  const [trimEnd, setTrimEnd] = useState(0);
-  const [fadeInMs, setFadeInMs] = useState(0);
-  const [fadeOutMs, setFadeOutMs] = useState(0);
-  const [editorLoading, setEditorLoading] = useState(false);
-  const [editorError, setEditorError] = useState("");
-  const [editorDragMode, setEditorDragMode] = useState(null);
   const fileRef = useRef(null);
-  const editorCanvasRef = useRef(null);
-  const editorDragRef = useRef(null);
-  const sourceBufferRef = useRef(null);
-  const waveformMonoRef = useRef(null);
+  const editor = useTrimEditor();
+  const {
+    editorDuration, trimStart, setTrimStart, trimEnd, setTrimEnd,
+    fadeInMs, setFadeInMs, fadeOutMs, setFadeOutMs,
+    editorLoading, setEditorLoading, editorError, setEditorError, editorDragMode,
+    canvasRef: editorCanvasRef, beginEditorDrag, loadEditorBuffer, buildEditedFile, resetEditor,
+  } = editor;
 
   const visibleStems = separateMode === "htdemucs_6s"
     ? STEMS
     : STEMS.filter((s) => s.id !== "guitar" && s.id !== "piano");
 
   const baseName = file ? file.name.replace(/\.[^.]+$/, "") : `Track ${trackIdx}`;
-
-  useEffect(() => {
-    drawEditorWaveform(
-      editorCanvasRef.current,
-      waveformMonoRef.current,
-      trimStart,
-      trimEnd || editorDuration,
-      editorDuration,
-    );
-  }, [editorDuration, trimEnd, trimStart]);
-
-  const updateTrimFromPointer = useCallback((clientX) => {
-    const canvas = editorCanvasRef.current;
-    const drag = editorDragRef.current;
-    if (!canvas || !drag || !editorDuration) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-    const time = ratio * editorDuration;
-    const minGap = 0.05;
-    const maxWindow = Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration);
-
-    if (drag.mode === "start") {
-      setTrimStart(clamp(time, Math.max(0, trimEnd - maxWindow), Math.max(0, trimEnd - minGap)));
-    } else if (drag.mode === "end") {
-      const minEnd = Math.min(editorDuration, trimStart + minGap);
-      const maxEnd = Math.max(minEnd, Math.min(editorDuration, trimStart + maxWindow));
-      setTrimEnd(clamp(time, minEnd, maxEnd));
-    } else if (drag.mode === "move") {
-      const selectionLength = Math.min(drag.selectionLength, maxWindow);
-      const nextStart = clamp(time - drag.pointerOffset, 0, Math.max(0, editorDuration - selectionLength));
-      setTrimStart(nextStart);
-      setTrimEnd(Math.min(editorDuration, nextStart + selectionLength));
-    }
-  }, [editorDuration, trimEnd, trimStart]);
-
-  useEffect(() => {
-    if (!editorDragMode) return undefined;
-    const handlePointerMove = (event) => updateTrimFromPointer(event.clientX);
-    const handlePointerUp = () => {
-      editorDragRef.current = null;
-      setEditorDragMode(null);
-    };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [editorDragMode, updateTrimFromPointer]);
-
-  const beginEditorDrag = useCallback((event) => {
-    if (editorLoading || !editorDuration || !editorCanvasRef.current) return;
-    const rect = editorCanvasRef.current.getBoundingClientRect();
-    const pointerX = clamp(event.clientX - rect.left, 0, rect.width);
-    const startX = (trimStart / editorDuration) * rect.width;
-    const endX = ((trimEnd || editorDuration) / editorDuration) * rect.width;
-    const handleZone = 16;
-    let mode = null;
-    if (Math.abs(pointerX - startX) <= handleZone) mode = "start";
-    else if (Math.abs(pointerX - endX) <= handleZone) mode = "end";
-    else if (pointerX > startX && pointerX < endX) mode = "move";
-    if (!mode) return;
-
-    event.preventDefault();
-    const pointerTime = (pointerX / Math.max(1, rect.width)) * editorDuration;
-    editorDragRef.current = {
-      mode,
-      pointerOffset: pointerTime - trimStart,
-      selectionLength: Math.min(Math.max(0.05, (trimEnd || editorDuration) - trimStart), Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration)),
-    };
-    setEditorDragMode(mode);
-    updateTrimFromPointer(event.clientX);
-  }, [editorDuration, editorLoading, trimEnd, trimStart, updateTrimFromPointer]);
-
-  const loadEditorBuffer = useCallback(async (incoming) => {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) throw new Error("Editor no disponible en este navegador.");
-    const context = new AudioContextClass();
-    try {
-      const decoded = await context.decodeAudioData((await incoming.arrayBuffer()).slice(0));
-      sourceBufferRef.current = decoded;
-      waveformMonoRef.current = mixToMono(decoded);
-      setEditorDuration(decoded.duration);
-      setTrimStart(0);
-      setTrimEnd(Math.min(decoded.duration, MAX_TRIM_WINDOW_SECONDS));
-      setFadeInMs(0);
-      setFadeOutMs(0);
-      setEditorError("");
-    } finally {
-      await context.close();
-    }
-  }, []);
-
-  const buildEditedFile = useCallback(async () => {
-    if (!file || !sourceBufferRef.current) return file;
-    const safeEnd = Math.max(trimStart + 0.05, trimEnd || editorDuration || trimStart + 0.05);
-    const editedBuffer = renderEditedBuffer(sourceBufferRef.current, trimStart, safeEnd, fadeInMs / 1000, fadeOutMs / 1000);
-    const blob = audioBufferToWavBlob(editedBuffer);
-    return new File([blob], `${baseName || "track"}-edit.wav`, { type: "audio/wav" });
-  }, [baseName, editorDuration, fadeInMs, fadeOutMs, file, trimEnd, trimStart]);
 
   useEffect(() => {
     onStemsChange(trackId, status === "done" ? stems : {}, baseName, trackBpm);
@@ -4553,23 +4605,16 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     setOriginalUrl(URL.createObjectURL(incoming));
     setStems((prev) => { revokeStemUrls(prev); return {}; });
     setTrackBpm(null);
-    sourceBufferRef.current = null;
-    waveformMonoRef.current = null;
-    setEditorDuration(0);
-    setTrimStart(0);
-    setTrimEnd(0);
-    setFadeInMs(0);
-    setFadeOutMs(0);
+    resetEditor();
     setEditorLoading(true);
-    setEditorError("");
     setStatus("idle");
     setProgress(0);
     setError("");
     setCurrentStep("");
     loadEditorBuffer(incoming)
       .catch((err) => {
-        sourceBufferRef.current = null;
-        waveformMonoRef.current = null;
+        editor.sourceBufferRef.current = null;
+        editor.waveformMonoRef.current = null;
         setEditorError(err instanceof Error ? err.message : "No se pudo cargar el editor de audio.");
       })
       .finally(() => setEditorLoading(false));
@@ -4621,7 +4666,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     }, 380);
 
     try {
-      const sourceFile = await buildEditedFile();
+      const sourceFile = await buildEditedFile(file, baseName);
       const detectedBpm = await estimateBpmFromFile(sourceFile).catch(() => null);
       setTrackBpm(detectedBpm);
       const separate = engine === "local" ? separateTrackLocally : separateTrackViaModal;
@@ -4648,15 +4693,7 @@ function TrackSlot({ trackId, trackIdx, onStemsChange, onRemove, showMixer = tru
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setFile(null);
     setOriginalUrl("");
-    sourceBufferRef.current = null;
-    waveformMonoRef.current = null;
-    setEditorDuration(0);
-    setTrimStart(0);
-    setTrimEnd(0);
-    setFadeInMs(0);
-    setFadeOutMs(0);
-    setEditorError("");
-    setEditorLoading(false);
+    resetEditor();
     setStatus("idle");
     setProgress(0);
     setStems((prev) => { revokeStemUrls(prev); return {}; });
@@ -5249,17 +5286,9 @@ export default function Page() {
   const [sequencerMute, setSequencerMute] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
   const [sequencerSolo, setSequencerSolo] = useState({ original: false, drums: false, bass: false, vocals: false, other: false, guitar: false, piano: false });
   const [sequencerLevels, setSequencerLevels] = useState({ original: 85, drums: 85, bass: 85, vocals: 85, other: 85, guitar: 85, piano: 80 });
-  const [editorDuration, setEditorDuration] = useState(0);
-  const [trimStart, setTrimStart] = useState(0);
-  const [trimEnd, setTrimEnd] = useState(0);
-  const [fadeInMs, setFadeInMs] = useState(0);
-  const [fadeOutMs, setFadeOutMs] = useState(0);
   const [paramsExpanded, setParamsExpanded] = useState(false);
-  const [editorLoading, setEditorLoading] = useState(false);
-  const [editorError, setEditorError] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewPosition, setPreviewPosition] = useState(null);
-  const [editorDragMode, setEditorDragMode] = useState(null);
   const [analysisFile, setAnalysisFile] = useState(null);
   const [trimWindowToast, setTrimWindowToast] = useState("");
 
@@ -5268,8 +5297,6 @@ export default function Page() {
   const playingRef = useRef(null);
   const trimStartRef = useRef(0);
   const fileRef = useRef(null);
-  const waveformCanvasRef = useRef(null);
-  const editorDragRef = useRef(null);
   const sequencerTimerRef = useRef(null);
   const sequencerAudioCtxRef = useRef(null);
   const sequencerSourcesRef = useRef({});
@@ -5290,6 +5317,34 @@ export default function Page() {
   const [extraTrackData, setExtraTrackData] = useState({});
   const [mixerView, setMixerView] = useState("separate");
   const [autoMixEnabled, setAutoMixEnabled] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(false);
+
+  const showTrimWindowLimitToast = useCallback(() => {
+    setTrimWindowToast(MAX_TRIM_WINDOW_TOAST);
+    if (trimToastTimerRef.current) {
+      clearTimeout(trimToastTimerRef.current);
+    }
+    trimToastTimerRef.current = setTimeout(() => {
+      setTrimWindowToast("");
+      trimToastTimerRef.current = null;
+    }, 2600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (trimToastTimerRef.current) {
+        clearTimeout(trimToastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const editor = useTrimEditor({ onTrimClamped: showTrimWindowLimitToast, onBufferLoaded: setAnalysisFile, previewPosition });
+  const {
+    editorDuration, trimStart, setTrimStart, trimEnd, setTrimEnd,
+    fadeInMs, setFadeInMs, fadeOutMs, setFadeOutMs,
+    editorLoading, setEditorLoading, editorError, setEditorError, editorDragMode,
+    canvasRef: waveformCanvasRef, beginEditorDrag: beginWaveformDrag, loadEditorBuffer, buildEditedFile, resetEditor,
+  } = editor;
 
   // ── Locale & Theme ─────────────────────────────────────────────────
   const [locale, setLocale] = useState("en");
@@ -5300,15 +5355,18 @@ export default function Page() {
     const savedLocale = localStorage.getItem("sterms_locale");
     const savedTheme = localStorage.getItem("sterms_theme");
     const savedEngine = localStorage.getItem("sterms_engine");
+    const savedAdvanced = localStorage.getItem("sterms_advanced");
     if (savedLocale && LOCALES.some((l) => l.id === savedLocale)) setLocale(savedLocale);
     if (savedTheme && THEMES[savedTheme]) setThemeName(savedTheme);
     if (savedEngine === "local" || savedEngine === "cloud") setEngine(savedEngine);
+    if (savedAdvanced === "1") setAdvancedMode(true);
   }, []);
 
   // Persist to localStorage
   useEffect(() => { localStorage.setItem("sterms_locale", locale); }, [locale]);
   useEffect(() => { localStorage.setItem("sterms_theme", themeName); }, [themeName]);
   useEffect(() => { localStorage.setItem("sterms_engine", engine); }, [engine]);
+  useEffect(() => { localStorage.setItem("sterms_advanced", advancedMode ? "1" : "0"); }, [advancedMode]);
 
   const theme = THEMES[themeName] || THEMES.dark;
   const accentColor = theme.accent;
@@ -5682,25 +5740,6 @@ export default function Page() {
     trimStartRef.current = trimStart;
   }, [trimStart]);
 
-  const showTrimWindowLimitToast = useCallback(() => {
-    setTrimWindowToast(MAX_TRIM_WINDOW_TOAST);
-    if (trimToastTimerRef.current) {
-      clearTimeout(trimToastTimerRef.current);
-    }
-    trimToastTimerRef.current = setTimeout(() => {
-      setTrimWindowToast("");
-      trimToastTimerRef.current = null;
-    }, 2600);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (trimToastTimerRef.current) {
-        clearTimeout(trimToastTimerRef.current);
-      }
-    };
-  }, []);
-
   useEffect(() => {
     const audio = new Audio();
     audio.preload = "auto";
@@ -5774,12 +5813,12 @@ export default function Page() {
   }, [patternMode, generationSeed, patternStatus, stopSequencer]);
 
   useEffect(() => {
-    if (!analysisFile || !ready || !Object.keys(stems).length) {
+    if (!advancedMode || !analysisFile || !ready || !Object.keys(stems).length) {
       return;
     }
 
     createPatterns(analysisFile, stems);
-  }, [analysisFile, patternBars, ready, stems]);
+  }, [advancedMode, analysisFile, patternBars, ready, stems]);
 
   useEffect(() => {
     if (!file || !ready || !Object.keys(stems).length) {
@@ -5795,168 +5834,6 @@ export default function Page() {
     },
     [originalUrl],
   );
-
-  const sourceBufferRef = useRef(null);
-  const waveformMonoRef = useRef(null);
-
-  useEffect(() => {
-    drawEditorWaveform(
-      waveformCanvasRef.current,
-      waveformMonoRef.current,
-      trimStart,
-      trimEnd || editorDuration,
-      editorDuration,
-      previewPosition,
-    );
-  }, [editorDuration, previewPosition, trimEnd, trimStart]);
-
-  const updateTrimFromPointer = useCallback(
-    (clientX) => {
-      const canvas = waveformCanvasRef.current;
-      const drag = editorDragRef.current;
-      if (!canvas || !drag || !editorDuration) {
-        return;
-      }
-
-      const rect = canvas.getBoundingClientRect();
-      const ratio = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-      const time = ratio * editorDuration;
-      const minGap = 0.05;
-      const maxWindow = Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration);
-
-      if (drag.mode === "start") {
-        const minStart = Math.max(0, trimEnd - maxWindow);
-        const maxStart = Math.max(0, trimEnd - minGap);
-        if (time < minStart - 0.0001) {
-          showTrimWindowLimitToast();
-        }
-        setTrimStart(clamp(time, minStart, maxStart));
-        return;
-      }
-
-      if (drag.mode === "end") {
-        const minEnd = Math.min(editorDuration, trimStart + minGap);
-        const maxEnd = Math.max(minEnd, Math.min(editorDuration, trimStart + maxWindow));
-        if (time > maxEnd + 0.0001) {
-          showTrimWindowLimitToast();
-        }
-        setTrimEnd(clamp(time, minEnd, maxEnd));
-        return;
-      }
-
-      if (drag.mode === "move") {
-        const lockedSelection = Math.min(drag.selectionLength, maxWindow);
-        const nextStart = clamp(time - drag.pointerOffset, 0, Math.max(0, editorDuration - lockedSelection));
-        const nextEnd = Math.min(editorDuration, nextStart + lockedSelection);
-        setTrimStart(nextStart);
-        setTrimEnd(nextEnd);
-      }
-    },
-    [editorDuration, showTrimWindowLimitToast, trimEnd, trimStart],
-  );
-
-  useEffect(() => {
-    if (!editorDragMode) {
-      return undefined;
-    }
-
-    const handlePointerMove = (event) => {
-      updateTrimFromPointer(event.clientX);
-    };
-
-    const handlePointerUp = () => {
-      editorDragRef.current = null;
-      setEditorDragMode(null);
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [editorDragMode, updateTrimFromPointer]);
-
-  const beginWaveformDrag = useCallback(
-    (event) => {
-      if (editorLoading || !editorDuration || !waveformCanvasRef.current) {
-        return;
-      }
-
-      const rect = waveformCanvasRef.current.getBoundingClientRect();
-      const pointerX = clamp(event.clientX - rect.left, 0, rect.width);
-      const startX = (trimStart / editorDuration) * rect.width;
-      const endX = ((trimEnd || editorDuration) / editorDuration) * rect.width;
-      const handleZone = 16;
-
-      let mode = null;
-      if (Math.abs(pointerX - startX) <= handleZone) {
-        mode = "start";
-      } else if (Math.abs(pointerX - endX) <= handleZone) {
-        mode = "end";
-      } else if (pointerX > startX && pointerX < endX) {
-        mode = "move";
-      }
-
-      if (!mode) {
-        return;
-      }
-
-      event.preventDefault();
-      const pointerTime = (pointerX / Math.max(1, rect.width)) * editorDuration;
-      editorDragRef.current = {
-        mode,
-        pointerOffset: pointerTime - trimStart,
-        selectionLength: Math.min(Math.max(0.05, (trimEnd || editorDuration) - trimStart), Math.min(MAX_TRIM_WINDOW_SECONDS, editorDuration)),
-      };
-      setEditorDragMode(mode);
-      updateTrimFromPointer(event.clientX);
-    },
-    [editorDuration, editorLoading, trimEnd, trimStart, updateTrimFromPointer],
-  );
-
-  const loadEditorBuffer = useCallback(async (incoming) => {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) {
-      throw new Error("Tu navegador no soporta Web Audio para previsualizar el archivo.");
-    }
-
-    const context = new AudioContextClass();
-    try {
-      const arrayBuffer = await incoming.arrayBuffer();
-      const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
-      sourceBufferRef.current = decoded;
-      waveformMonoRef.current = mixToMono(decoded);
-      setEditorError("");
-      setEditorDuration(decoded.duration);
-      setTrimStart(0);
-      setTrimEnd(Math.min(decoded.duration, MAX_TRIM_WINDOW_SECONDS));
-      setFadeInMs(0);
-      setFadeOutMs(0);
-      setAnalysisFile(incoming);
-      return true;
-    } finally {
-      await context.close();
-    }
-  }, []);
-
-  const buildEditedFile = useCallback(async () => {
-    if (!file || !sourceBufferRef.current) {
-      return file;
-    }
-
-    const safeEnd = Math.max(trimStart + 0.05, trimEnd || editorDuration || trimStart + 0.05);
-    const editedBuffer = renderEditedBuffer(
-      sourceBufferRef.current,
-      trimStart,
-      safeEnd,
-      fadeInMs / 1000,
-      fadeOutMs / 1000,
-    );
-    const blob = audioBufferToWavBlob(editedBuffer);
-    return new File([blob], `${baseName || "track"}-edit.wav`, { type: "audio/wav" });
-  }, [baseName, editorDuration, fadeInMs, fadeOutMs, file, trimEnd, trimStart]);
 
   const playSource = async (sourceId, sourceUrl, volume = 1) => {
     const player = audioRef.current;
@@ -6140,13 +6017,7 @@ export default function Page() {
 
     loadEditorBuffer(incoming)
       .catch((loadError) => {
-        sourceBufferRef.current = null;
-        waveformMonoRef.current = null;
-        setEditorDuration(0);
-        setTrimStart(0);
-        setTrimEnd(0);
-        setFadeInMs(0);
-        setFadeOutMs(0);
+        resetEditor();
         setEditorError(
           loadError instanceof Error
             ? `Editor no disponible para este WAV: ${loadError.message}`
@@ -6177,15 +6048,8 @@ export default function Page() {
     setFile(null);
     setAnalysisFile(null);
     setOriginalUrl("");
-    setEditorError("");
-    setEditorDuration(0);
-    setTrimStart(0);
-    setTrimEnd(0);
-    setFadeInMs(0);
-    setFadeOutMs(0);
+    resetEditor();
     setPreviewPosition(null);
-    sourceBufferRef.current = null;
-    waveformMonoRef.current = null;
     setStatus("idle");
     setProgress(0);
     setCurrentStep("");
@@ -6300,7 +6164,7 @@ export default function Page() {
     }, 380);
 
     try {
-      const sourceFile = await buildEditedFile();
+      const sourceFile = await buildEditedFile(file, baseName);
       setAnalysisFile(sourceFile);
 
       const separate = engine === "local" ? separateTrackLocally : separateTrackViaModal;
@@ -6320,7 +6184,7 @@ export default function Page() {
       setProgress(100);
       setCurrentStep("Stems ready");
       setStatus("done");
-      if (SHOW_SEQUENCER_PANEL) {
+      if (advancedMode) {
         await createPatterns(sourceFile, nextStems || {});
       }
     } catch (processingError) {
@@ -6402,7 +6266,7 @@ export default function Page() {
     setPreviewBusy(true);
     setPreviewPosition(trimStart);
     try {
-      const previewFile = await buildEditedFile();
+      const previewFile = await buildEditedFile(file, baseName);
       const previewUrl = URL.createObjectURL(previewFile);
       await playSource("original-preview", previewUrl, 1);
       const player = audioRef.current;
@@ -6804,6 +6668,28 @@ export default function Page() {
                 />
               ))}
             </div>
+
+            {/* Advanced mode toggle: sequencer + groove comparison */}
+            <button
+              type="button"
+              onClick={() => setAdvancedMode((prev) => !prev)}
+              title="Activa el secuenciador de patrones y la comparacion de groove entre stems"
+              style={{
+                marginLeft: 10,
+                fontFamily: "'Space Mono', monospace",
+                fontSize: 9,
+                letterSpacing: 1,
+                padding: "3px 8px",
+                borderRadius: 5,
+                border: `1px solid ${advancedMode ? accentColor : "rgba(255,255,255,0.15)"}`,
+                background: advancedMode ? `${accentColor}22` : "transparent",
+                color: advancedMode ? accentColor : "rgba(255,255,255,0.45)",
+                cursor: "pointer",
+                transition: "all 0.15s",
+              }}
+            >
+              MODO AVANZADO
+            </button>
           </div>
 
           <h1
@@ -7616,7 +7502,7 @@ export default function Page() {
           </div>
         )}
 
-        {SHOW_SEQUENCER_PANEL && file && (
+        {advancedMode && file && (
           <div
             style={{
               background: "rgba(255,255,255,0.02)",
@@ -7906,7 +7792,7 @@ export default function Page() {
           </div>
         )}
 
-        {SHOW_GROOVE_COMPARISON && ready && <GrooveComparison stemUrls={stems} />}
+        {advancedMode && ready && <GrooveComparison stemUrls={stems} />}
 
         {/* ── Multi-track section ──────────────────────────────────── */}
         <div style={{ marginTop: 32 }}>
