@@ -3,7 +3,7 @@
 # 🎚️ STEMS — Four-Stem Separator
 
 **Split any audio track into Vocals · Drums · Bass · Other**
-*Powered by [Demucs HTDemucs](https://github.com/facebookresearch/demucs) · Built with Next.js 15 · GPU-accelerated (CUDA)*
+*Powered by [Demucs HTDemucs](https://github.com/facebookresearch/demucs) · Built with Next.js 16 + React 19 · GPU-accelerated (CUDA)*
 
 ![preview](preview.png)
 

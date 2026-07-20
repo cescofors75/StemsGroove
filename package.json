@@ -16,8 +16,8 @@
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
     "jszip": "^3.10.1",
-    "next": "15.5.12",
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   }
 }

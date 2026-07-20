@@ -17,14 +17,24 @@ const MODEL_STEMS = {
 };
 
 const ALLOWED_MODELS = Object.keys(MODEL_STEMS);
-const STEMS_ROOT = path.join(process.cwd(), ".stems");
+// These directory names are built from arrays/variables instead of inline
+// string literals so bundler static-asset analysis (Turbopack/webpack file
+// tracing) doesn't try to statically walk them: .stems is written to at
+// request time, and .venv contains a Python interpreter symlink chain that
+// can crash that tracer.
+const STEMS_DIRNAME = [".", "stems"].join("");
+const VENV_DIRNAME = [".", "venv"].join("");
+const STEMS_ROOT = path.join(/* turbopackIgnore: true */ process.cwd(), STEMS_DIRNAME);
 const MAX_RUN_AGE_MS = 2 * 60 * 60 * 1000;
 
+function resolveVenvPath(...segments) {
+  return path.join(/* turbopackIgnore: true */ process.cwd(), VENV_DIRNAME, ...segments);
+}
+
 function resolvePythonBin() {
-  const cwd = process.cwd();
-  const winVenv = path.join(cwd, ".venv", "Scripts", "python.exe");
-  const posixVenv = path.join(cwd, ".venv", "bin", "python3");
-  const posixVenvAlt = path.join(cwd, ".venv", "bin", "python");
+  const winVenv = resolveVenvPath("Scripts", "python.exe");
+  const posixVenv = resolveVenvPath("bin", "python3");
+  const posixVenvAlt = resolveVenvPath("bin", "python");
 
   if (process.platform === "win32" && fsSync.existsSync(winVenv)) {
     return winVenv;
