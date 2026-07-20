@@ -3253,6 +3253,7 @@ function StemMixer({ stems: stemUrls, stemDefs, baseName, onStopOtherPlayback, p
   }, []);
 
   const mixStartRaf = useCallback(() => {
+    mixStopRaf();
     const loop = () => {
       const ctx = mixAudioCtxRef.current;
       if (!ctx || ctx.state === "closed") return;
