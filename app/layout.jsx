@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Stems - Stem Separator",
+  title: "OpenSTEM SEPARATOR",
   description: "4-stem separation with Next.js + Demucs",
 };
 
